@@ -1,0 +1,13 @@
+openai:
+  api_key_env: "OPENAI_API_KEY"
+  model: "gpt-5" # default to a valid model
+tavily:
+  api_key_env: "TAVILY_API_KEY"
+search:
+  results_per_query: 5
+execution:
+  max_steps: 5
+storage:
+  chroma_path: ".chroma_drug_pipeline"
+data:
+  input_csv: "data/Drug_Development_phase_segmentation_time_cost_citations.csv"
