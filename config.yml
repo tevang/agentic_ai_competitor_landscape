@@ -1,13 +1,118 @@
-openai:
-  api_key_env: "OPENAI_API_KEY"
-  model: "gpt-5" # default to a valid model
-tavily:
-  api_key_env: "TAVILY_API_KEY"
-search:
-  results_per_query: 5
-execution:
+paths:
+  pipeline_csv: data/Drug_Development_phase_segmentation_time_cost_citations.csv
+  chroma_path: .chroma_drug_pipeline
+  chroma_collection_name: drug_pipeline_competitor_evidence
+
+runtime:
   max_steps: 5
-storage:
-  chroma_path: ".chroma_drug_pipeline"
-data:
-  input_csv: "data/Drug_Development_phase_segmentation_time_cost_citations.csv"
+  max_candidates_per_step: 10
+  verbose: true
+
+openai:
+  api_key_env_var: OPENAI_API_KEY
+  model: gpt-5
+  retry_attempts: 3
+  retry_wait_min_seconds: 1
+  retry_wait_max_seconds: 15
+
+# Tavily knobs are grouped here so search rigor can be tuned without editing Python.
+tavily:
+  api_key_env_var: TAVILY_API_KEY
+  topic: general
+  search_depth: advanced
+  chunks_per_source: 3
+  default_max_results: 5
+  step_search_max_results: 5
+  company_search_max_results: 5
+  queries_per_step: 5
+  auto_parameters: false
+  exact_match: false
+  include_answer: false
+  include_raw_content: false
+  include_images: false
+  include_image_descriptions: false
+  include_favicon: false
+  include_usage: false
+  include_domains: []
+  exclude_domains: []
+  country: null
+  time_range: null
+  days: null
+  start_date: null
+  end_date: null
+  step_fetch_text_for_top_n_results: 3
+  company_fetch_text_for_top_n_results: 3
+  # Fetching full page text for only the top-N search results saves time and tokens.
+  page_text_char_limit: 2500
+  trafilatura_include_links: false
+  trafilatura_include_images: false
+  search_cache_size: 512
+  fetch_cache_size: 1024
+
+rag:
+  chroma_document_char_limit: 4000
+  store_query_n_results: 8
+  enrichment_rag_results: 10
+  verification_rag_results: 8
+  step_context_limit: 12
+  step_context_chars_per_item: 900
+  enrichment_context_limit: 14
+  enrichment_context_chars_per_item: 900
+  verification_context_limit: 8
+  verification_context_chars_per_item: 900
+
+react:
+  enable_refinement_pass: true
+  min_candidates_before_refine: 3
+  refinement_query_count: 5
+
+dedupe:
+  fuzzy_threshold: 94
+
+reporting:
+  matrix_head_rows: 20
+  profile_head_rows: 20
+  gap_head_rows: 12
+  slide_gap_head_rows: 10
+  slide_count: 10
+
+scoring:
+  explicit_agentic_weight: 0.5
+  vertical_weight: 0.35
+  whitespace_baseline: 4.5
+  default_pain_weight: 2.5
+  pain_weights:
+    Target identification: 2.0
+    Target validation: 2.2
+    Assay development: 2.0
+    Hit identification: 1.8
+    Hit-to-Lead: 2.0
+    Lead identification: 2.0
+    Lead optimization: 2.0
+    Candidate selection & pre-formulation: 2.8
+    Pharmacology & ADME: 2.6
+    Toxicology: 3.4
+    Proof-of-concept & efficacy: 2.8
+    Phase 0 (microdosing): 2.2
+    Formulation & delivery optimisation: 3.2
+    IND preparation: 3.5
+    Study design & initiation: 2.6
+    Phase I: 2.4
+    Phase II: 2.6
+    Phase III: 2.8
+    Phase IV: 2.7
+    NDA/BLA submission: 3.3
+    FDA review & decision: 3.2
+    Reasons for failure: 3.0
+    Generics/ANDA: 2.4
+    Pharmacovigilance: 3.3
+    Additional indications & formulations: 2.8
+    Manufacturing scale-up & quality: 3.5
+  regulatory_tailwind:
+    Toxicology: 1.4
+    Formulation & delivery optimisation: 0.8
+    IND preparation: 1.6
+    NDA/BLA submission: 1.4
+    FDA review & decision: 1.2
+    Pharmacovigilance: 1.4
+    Manufacturing scale-up & quality: 1.2
