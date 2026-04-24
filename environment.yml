@@ -1,0 +1,21 @@
+name: agentic_ai_competitor_landscape
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - openai>=1.30.0
+      - tavily-python>=0.5.0
+      - pydantic>=2.7.0
+      - pandas>=2.2.0
+      - chromadb>=0.5.0
+      - trafilatura>=1.10.0
+      - rapidfuzz>=3.9.0
+      - python-dotenv>=1.0.1
+      - tenacity>=8.2.3
+      - tabulate>=0.9.0
+      - pyyaml>=6.0.1
+      - pytest>=8.2.0

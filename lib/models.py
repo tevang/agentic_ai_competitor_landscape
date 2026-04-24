@@ -1,19 +1,19 @@
+"""Pydantic models used across the competitor-landscape pipeline."""
+
 from pydantic import BaseModel, Field
-from typing import Any
+
 
 class PipelineStep(BaseModel):
-    """
-    Represents a single step in the drug development pipeline.
-    """
+    """A single drug-development phase step loaded from the input CSV."""
+
     phase: str
     step: str
     activities: str
 
 
 class EvidenceDoc(BaseModel):
-    """
-    Represents a document collected as evidence during research.
-    """
+    """A normalized evidence document gathered from search results or fetched pages."""
+
     phase: str
     step: str
     query: str
@@ -21,39 +21,74 @@ class EvidenceDoc(BaseModel):
     title: str = ""
     snippet: str = ""
     text: str = ""
+    company_name: str = ""
+    source_type: str = "web_search"
 
 
 class Candidate(BaseModel):
-    """
-    Represents a candidate company found during the initial research pass.
-    """
+    """A candidate competitor extracted from step-level evidence."""
+
     name: str
     rationale: str
     vertical_or_horizontal_guess: str = ""
     confidence: float = 0.5
     evidence_urls: list[str] = Field(default_factory=list)
+    source: str = "discovered"
 
 
 class CompanyProfile(BaseModel):
-    """
-    A full profile of a company, enriched with more detailed information.
-    """
+    """A normalized company profile used for cross-step competitor comparison."""
+
     name: str
     vertical_or_horizontal: str
     funding: str = ""
+    funding_rounds: str = ""
     employees: str = ""
     founded: str = ""
     headquarters: str = ""
     presence: list[str] = Field(default_factory=list)
+    website: str = ""
     specialization: str = ""
-    explicit_agentic_posture: str = "unclear"  # explicit | adjacent | unclear
+    explicit_agentic_posture: str = "unclear"
     confidence: float = 0.5
+    evidence_urls: list[str] = Field(default_factory=list)
+    logo_path: str = ""
 
 
 class VerificationResult(BaseModel):
-    """
-    The result of verifying whether a company belongs in a specific pipeline step.
-    """
-    belongs: bool
+    """A verification decision for whether a company belongs in a specific step."""
+
+    include: bool
     confidence: float
-    reasoning: str
+    reason: str
+
+
+class UserSeedCompany(BaseModel):
+    """A user-provided company record loaded from the optional seed-company CSV."""
+
+    company_name: str
+    classification: str = ""
+    website: str = ""
+    phase: str = ""
+    step: str = ""
+    notes: str = ""
+    funding: str = ""
+    funding_rounds: str = ""
+    employees: str = ""
+    founded: str = ""
+    headquarters: str = ""
+    presence: str = ""
+
+
+class CompanyResearchRequest(BaseModel):
+    """A normalized research request that can be passed to the research and enrichment agents."""
+
+    company_name: str
+    classification: str = ""
+    website: str = ""
+    phase: str = ""
+    step: str = ""
+    notes: str = ""
+    known_fields: dict[str, str] = Field(default_factory=dict)
+    preferred_domains: list[str] = Field(default_factory=list)
+    query_hints: list[str] = Field(default_factory=list)

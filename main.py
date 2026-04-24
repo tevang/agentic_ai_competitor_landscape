@@ -1,106 +1,130 @@
-import os
-import pandas as pd
-from dotenv import load_dotenv
-from openai import OpenAI
-from tavily import TavilyClient
+"""Entry point for the biotech agentic competitive-intelligence pipeline."""
 
-from lib.utils import load_config, parse_pipeline_csv
-from lib.llm_utils import LLM
-from lib.evidence import EvidenceStore
-from lib.agents.orchestrator import process_step
-from lib.reporting import (
-    build_profile_df, 
-    build_matrix_df, 
-    compute_gap_scores, 
-    generate_gap_memo, 
-    generate_slide_outline
-)
+import argparse
+
+from dotenv import load_dotenv
+
+from lib.agents.critical_agent import CriticalAgent
+from lib.agents.enrichment_agent import EnrichmentAgent
+from lib.agents.extraction_agent import ExtractionAgent
+from lib.agents.fact_driven_analyst_agent import FactDrivenAnalystAgent
+from lib.agents.planner_agent import PlannerAgent
+from lib.agents.presentation_agent import PresentationAgent
+from lib.agents.research_agent import ResearchAgent
+from lib.agents.user_company_intake_agent import UserCompanyIntakeAgent
+from lib.agents.verification_agent import VerificationAgent
+from lib.config import load_config
+from lib.llm import LLM
+from lib.orchestrator import CompetitiveLandscapeOrchestrator
+from lib.retrieval.evidence_store import EvidenceStore
+from lib.retrieval.web_search import WebSearchService
+from lib.utils.io_utils import load_pipeline_csv, load_seed_companies_csv
+from lib.utils.logo_downloader import LogoDownloader
+from lib.utils.report_writer import ReportWriter
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the application entry point."""
+
+    parser = argparse.ArgumentParser(description="Run the biotech AI competitor-landscape workflow.")
+    parser.add_argument(
+        "--config",
+        default="config.yml",
+        help="Path to the YAML configuration file.",
+    )
+    return parser.parse_args()
+
+
+def print_dataframe_section(title: str, dataframe, empty_message: str) -> None:
+    """Print a dataframe section to stdout, or a fallback message when the dataframe is empty."""
+
+    print(f"\n\n# {title}\n")
+    if dataframe.empty:
+        print(empty_message)
+    else:
+        print(dataframe.to_markdown(index=False))
+
 
 def main() -> None:
-    """
-    Main entry point for the agentic competitor landscape analysis.
-    Loads configuration, initializes agents, and processes the drug development pipeline.
-    """
-    # Load environment variables and configuration
+    """Load configuration, initialize services, run the workflow, and print the outputs."""
+
     load_dotenv()
-    config = load_config("config.yml")
-    
-    openai_key = os.getenv(config['openai']['api_key_env'])
-    tavily_key = os.getenv(config['tavily']['api_key_env'])
-    
-    if not openai_key:
-        raise RuntimeError(f"Missing {config['openai']['api_key_env']}")
-    if not tavily_key:
-        raise RuntimeError(f"Missing {config['tavily']['api_key_env']}")
-        
-    # Initialize clients
-    openai_client = OpenAI(api_key=openai_key)
-    tavily_client = TavilyClient(api_key=tavily_key)
-    
-    # Initialize shared services
-    llm = LLM(client=openai_client, model=config['openai']['model'])
-    store = EvidenceStore(path=config['storage']['chroma_path'])
-    
-    # Load and prepare pipeline steps
-    steps = parse_pipeline_csv(config['data']['input_csv'])
-    max_steps = config['execution']['max_steps']
-    run_steps = steps[:max_steps] if max_steps > 0 else steps
-    
-    profile_cache = {}
-    all_records = []
-    
-    print(f"Loaded {len(steps)} pipeline steps. Running {len(run_steps)} step(s).")
-    
-    # Process each step in the pipeline
-    for step in run_steps:
-        step_records = process_step(
-            llm=llm, 
-            tavily_client=tavily_client, 
-            store=store, 
-            profile_cache=profile_cache, 
-            step=step,
-            search_results_per_query=config['search']['results_per_query']
-        )
-        all_records.extend(step_records)
-        
-    # Build dataframes for reporting
-    records_df = pd.DataFrame(all_records)
-    profile_df = build_profile_df(profile_cache)
-    matrix_df = build_matrix_df(records_df)
-    gap_df = compute_gap_scores(records_df, run_steps)
-    
-    # Print reports
-    print("\n\n# COMPETITOR COVERAGE MATRIX\n")
-    if matrix_df.empty:
-        print("No records yet.")
-    else:
-        print(matrix_df.to_markdown(index=False))
+    args = parse_args()
+    config = load_config(args.config)
 
-    print("\n\n# COMPANY PROFILES\n")
-    if profile_df.empty:
-        print("No profiles yet.")
-    else:
-        print(profile_df.to_markdown(index=False))
+    steps = load_pipeline_csv(config.paths.pipeline_csv)
+    seed_companies = load_seed_companies_csv(
+        path=config.paths.seed_companies_csv,
+        enabled=config.user_inputs.seed_companies_enabled,
+        required=config.user_inputs.seed_companies_required,
+    )
 
-    print("\n\n# GAP SCORES\n")
-    if gap_df.empty:
-        print("No gap scores available.")
-    else:
-        print(gap_df.to_markdown(index=False))
+    llm = LLM(config.openai)
+    web_search = WebSearchService(config)
+    store = EvidenceStore(config.paths, config.rag)
 
-    print("\n\n# STRATEGIC GAP MEMO\n")
-    if not matrix_df.empty:
-        gap_memo = generate_gap_memo(llm, matrix_df, profile_df, gap_df)
-        print(gap_memo)
-    else:
-        print("Insufficient data for memo.")
+    planner_agent = PlannerAgent(llm, config, store)
+    research_agent = ResearchAgent(config, web_search, store)
+    extraction_agent = ExtractionAgent(llm, config, store)
+    user_company_intake_agent = UserCompanyIntakeAgent(config)
+    enrichment_agent = EnrichmentAgent(llm, config, research_agent, store)
+    verification_agent = VerificationAgent(llm, config, store)
+    fact_driven_analyst_agent = FactDrivenAnalystAgent(llm, config)
+    critical_agent = CriticalAgent(llm, config)
+    presentation_agent = PresentationAgent(llm, config)
+    report_writer = ReportWriter(config)
+    logo_downloader = LogoDownloader(config)
+
+    orchestrator = CompetitiveLandscapeOrchestrator(
+        config=config,
+        planner_agent=planner_agent,
+        research_agent=research_agent,
+        extraction_agent=extraction_agent,
+        enrichment_agent=enrichment_agent,
+        verification_agent=verification_agent,
+        presentation_agent=presentation_agent,
+        user_company_intake_agent=user_company_intake_agent,
+        fact_driven_analyst_agent=fact_driven_analyst_agent,
+        critical_agent=critical_agent,
+        report_writer=report_writer,
+        logo_downloader=logo_downloader,
+    )
+    results = orchestrator.run(steps=steps, seed_companies=seed_companies)
+    processed_steps = results["run_steps"]
+
+    print(f"Loaded {len(steps)} pipeline steps. Running {len(processed_steps)} step(s).")
+    print_dataframe_section(
+        title="COMPETITOR COVERAGE MATRIX",
+        dataframe=results["matrix_df"],
+        empty_message="No records yet.",
+    )
+    print_dataframe_section(
+        title="COMPANY PROFILES",
+        dataframe=results["profile_df"],
+        empty_message="No profiles yet.",
+    )
+    print_dataframe_section(
+        title="GAP SCORES",
+        dataframe=results["gap_df"],
+        empty_message="No gaps yet.",
+    )
+
+    print("\n\n# FACT-DRIVEN ANALYST VIEW\n")
+    print(results["fact_analysis"])
+
+    print("\n\n# CRITICAL AGENT REVIEW\n")
+    print(results["critical_review"])
+
+    print("\n\n# GAP MEMO\n")
+    print(results["gap_memo"])
 
     print("\n\n# PRESENTATION OUTLINE\n")
-    if not gap_df.empty:
-        slide_outline = generate_slide_outline(llm, matrix_df, profile_df, gap_df)
-        print(slide_outline)
-    else:
-        print("Insufficient data for slide outline.")
+    print(results["slide_outline"])
+
+    if results["report_paths"]:
+        print("\n\n# WRITTEN REPORT FILES\n")
+        for label, path in results["report_paths"].items():
+            print(f"- {label}: {path}")
 
 
 if __name__ == "__main__":
