@@ -1,12 +1,37 @@
 paths:
-  pipeline_csv: data/subests/most_expensive.csv # Path to the CSV containing drug development pipeline stages
+  pipeline_csv: data/subests/one_most_expensive.csv # Path to the CSV containing drug development pipeline stages
+  seed_companies_csv: data/input/user_seed_companies.csv # Optional CSV of user-provided companies to confirm and enrich
   chroma_path: .chroma_drug_pipeline # Local directory for ChromaDB persistence
-  chroma_collection_name: drug_pipeline_competitor_evidence # Name of the vector database collection
+  chroma_collection_name: drug_pipeline_competitor # Prefix used for the Chroma collections
+  reports_dir: reports # Base directory for markdown reports and downloaded assets
+  logos_subdir: logos # Subdirectory inside each report run for downloaded company logos
 
 runtime:
   max_steps: 5 # Maximum number of research iterations to perform
   max_candidates_per_step: 10 # Maximum company candidates to extract in a single step
   verbose: true # Whether to output detailed execution logs to the console
+  process_user_seed_companies_first: true # Confirm and enrich user-provided companies before normal discovery
+  match_seed_companies_to_steps: true # Use phase/step hints from the seed CSV to inject seed companies into matching steps
+  run_label: null # Optional custom run label. Null creates a timestamped report directory
+
+user_inputs:
+  seed_companies_enabled: true # Whether to read the optional seed-company CSV file
+  seed_companies_required: false # Whether the run should fail if the seed-company CSV is missing
+
+company_data_sources:
+  funding: # Sites to prioritize when confirming total funding
+    - https://www.crunchbase.com/
+  funding_rounds: # Sites to prioritize when confirming number of funding rounds
+    - https://www.crunchbase.com/
+  employees: # Sites to prioritize when confirming employee count or employee range
+    - https://www.crunchbase.com/
+    - https://www.linkedin.com/company/
+  founded: # Sites to prioritize when confirming founding year
+    - https://www.crunchbase.com/
+  headquarters: # Sites to prioritize when confirming headquarters location
+    - https://www.crunchbase.com/
+  presence: # Sites to prioritize when confirming office footprint or broader geographical presence
+    - https://www.crunchbase.com/
 
 openai:
   api_key_env_var: OPENAI_API_KEY # Environment variable name for the OpenAI API key
@@ -15,24 +40,33 @@ openai:
   retry_wait_min_seconds: 1 # Minimum wait time between retries in seconds
   retry_wait_max_seconds: 15 # Maximum wait time between retries in seconds
 
+search_protocol:
+  active_rigor: standard # Search preset to use: light, standard, or deep
+  reuse_existing_step_evidence: true # Reuse previously stored step-level evidence before launching Tavily searches
+  reuse_existing_company_evidence: true # Reuse previously stored company-level evidence before launching Tavily searches
+  reuse_existing_profiles: true # Reuse previously stored company profiles before asking the LLM again
+  reuse_existing_query_plans: true # Reuse cached query plans for the same pipeline step
+  reuse_existing_candidates: true # Reuse cached extracted candidates for the same pipeline step
+  reuse_existing_verifications: true # Reuse cached step/company verification decisions
+  skip_web_if_existing_step_docs_at_least: 12 # Skip step-level web search if at least this many cached evidence docs exist
+  skip_web_if_existing_company_docs_at_least: 10 # Skip company-level web search if at least this many cached evidence docs exist
+  skip_llm_if_existing_profile_confidence_at_least: 0.75 # Reuse a cached company profile if confidence is already high enough
+  skip_llm_if_existing_verification_confidence_at_least: 0.75 # Reuse a cached verification decision if confidence is already high enough
+  prefer_cached_url_text: true # Reuse previously stored page text for a URL before fetching it again
+  allow_web_search_after_cache_hit: false # If false, strong cache hits prevent additional Tavily calls
+
 # Tavily knobs are grouped here so search rigor can be tuned without editing Python.
 tavily:
   api_key_env_var: TAVILY_API_KEY # Environment variable name for the Tavily API key
-  topic: general # Search topic category (general or news)
-  search_depth: advanced # Search precision level (basic or advanced)
-  chunks_per_source: 3 # Number of text chunks to pull from each search result
-  default_max_results: 5 # Default maximum number of results per search query
-  step_search_max_results: 5 # Max results for general research step queries
-  company_search_max_results: 5 # Max results for company-specific deep-dives
-  queries_per_step: 5 # Number of unique search queries generated per research step
+  topic: general # Search topic category (general, news, finance)
   auto_parameters: false # Whether to let Tavily automatically tune search parameters
   exact_match: false # Whether to enforce exact keyword matching
   include_answer: false # Whether to include a generated answer in the search response
-  include_raw_content: false # Whether to include full raw HTML in the search response
-  include_images: false # Whether to include image URLs in results
+  include_raw_content: false # Whether to include raw page content in the Tavily response itself
+  include_images: false # Whether to include image URLs in search responses
   include_image_descriptions: false # Whether to include descriptions for returned images
   include_favicon: false # Whether to include favicons for search results
-  include_usage: false # Whether to include API usage statistics in the response
+  include_usage: false # Whether to include Tavily API usage statistics
   include_domains: [] # List of specific domains to restrict search to
   exclude_domains: [] # List of domains to block from search results
   country: null # Restrict search results to a specific country code
@@ -40,26 +74,59 @@ tavily:
   days: null # Number of days back to search
   start_date: null # Specific start date for search window
   end_date: null # Specific end date for search window
-  step_fetch_text_for_top_n_results: 3 # Number of top results to fetch full text for during steps
-  company_fetch_text_for_top_n_results: 3 # Number of top results to fetch full text for during company deep-dives
-  # Fetching full page text for only the top-N search results saves time and tokens.
-  page_text_char_limit: 2500 # Maximum characters to extract from a single web page
   trafilatura_include_links: false # Whether to include hyperlinks in extracted text
   trafilatura_include_images: false # Whether to include image metadata in extracted text
-  search_cache_size: 512 # Number of search results to cache in memory
-  fetch_cache_size: 1024 # Number of page contents to cache in memory
+  search_cache_size: 512 # Number of Tavily search responses to cache in memory
+  fetch_cache_size: 1024 # Number of fetched page contents to cache in memory
+  profiles:
+    light: # Fastest and cheapest preset; good for an exploratory pass
+      search_depth: basic # Search depth preset for Tavily
+      chunks_per_source: 1 # Relevant only for advanced search depth
+      default_max_results: 3 # Default maximum number of results per query
+      step_search_max_results: 3 # Max results for step-level queries
+      company_search_max_results: 4 # Max results for company-level queries
+      queries_per_step: 3 # Number of search queries generated per pipeline step
+      queries_per_company: 4 # Number of search queries executed for a company enrichment pass
+      step_fetch_text_for_top_n_results: 1 # Number of top step-level results to fetch full text for
+      company_fetch_text_for_top_n_results: 2 # Number of top company-level results to fetch full text for
+      # Fetching full page text for only the top-N search results saves time and tokens.
+      page_text_char_limit: 1200 # Maximum characters to extract from a single web page
+    standard: # Balanced preset for most production runs
+      search_depth: advanced # Search depth preset for Tavily
+      chunks_per_source: 2 # Relevant only for advanced search depth
+      default_max_results: 5 # Default maximum number of results per query
+      step_search_max_results: 5 # Max results for step-level queries
+      company_search_max_results: 6 # Max results for company-level queries
+      queries_per_step: 5 # Number of search queries generated per pipeline step
+      queries_per_company: 6 # Number of search queries executed for a company enrichment pass
+      step_fetch_text_for_top_n_results: 3 # Number of top step-level results to fetch full text for
+      company_fetch_text_for_top_n_results: 3 # Number of top company-level results to fetch full text for
+      # Fetching full page text for only the top-N search results saves time and tokens.
+      page_text_char_limit: 2500 # Maximum characters to extract from a single web page
+    deep: # Highest rigor preset; use when you want breadth and more evidence density
+      search_depth: advanced # Search depth preset for Tavily
+      chunks_per_source: 3 # Relevant only for advanced search depth
+      default_max_results: 8 # Default maximum number of results per query
+      step_search_max_results: 8 # Max results for step-level queries
+      company_search_max_results: 10 # Max results for company-level queries
+      queries_per_step: 6 # Number of search queries generated per pipeline step
+      queries_per_company: 8 # Number of search queries executed for a company enrichment pass
+      step_fetch_text_for_top_n_results: 5 # Number of top step-level results to fetch full text for
+      company_fetch_text_for_top_n_results: 6 # Number of top company-level results to fetch full text for
+      # Fetching full page text for only the top-N search results saves time and tokens.
+      page_text_char_limit: 4000 # Maximum characters to extract from a single web page
 
 rag:
   chroma_document_char_limit: 4000 # Maximum characters allowed for a single document chunk in Chroma
-  store_query_n_results: 8 # Number of results to retrieve for general storage queries
+  store_query_n_results: 8 # Number of results to retrieve for general vector-store similarity queries
   enrichment_rag_results: 10 # Number of retrieval results for the enrichment agent
   verification_rag_results: 8 # Number of retrieval results for the verification agent
-  step_context_limit: 12 # Maximum number of context items for the planner agent
-  step_context_chars_per_item: 900 # Character limit for each context item in planner steps
-  enrichment_context_limit: 14 # Maximum number of context items for enrichment
-  enrichment_context_chars_per_item: 900 # Character limit for each context item in enrichment
-  verification_context_limit: 8 # Maximum number of context items for verification
-  verification_context_chars_per_item: 900 # Character limit for each context item in verification
+  step_context_limit: 12 # Maximum number of context items for step-level prompts
+  step_context_chars_per_item: 900 # Character limit for each context item in step-level prompts
+  enrichment_context_limit: 14 # Maximum number of context items for enrichment prompts
+  enrichment_context_chars_per_item: 900 # Character limit for each context item in enrichment prompts
+  verification_context_limit: 8 # Maximum number of context items for verification prompts
+  verification_context_chars_per_item: 900 # Character limit for each context item in verification prompts
 
 react:
   enable_refinement_pass: true # Whether to perform an extra search pass for validation
@@ -75,13 +142,36 @@ reporting:
   gap_head_rows: 12 # Number of rows to show in the gap analysis preview
   slide_gap_head_rows: 10 # Number of items to show in the slide-specific gap view
   slide_count: 10 # Total number of presentation slides to generate
+  write_markdown_files: true # Whether to write markdown reports to disk
+  report_file_name: competitor_landscape_report.md # Main markdown report containing all sections
+  gap_memo_file_name: gap_memo.md # Standalone markdown file for the synthesized memo
+  slide_outline_file_name: presentation_outline.md # Standalone markdown file for the slide outline
+  fact_analysis_file_name: fact_driven_analysis.md # Standalone markdown file for the fact-driven analyst
+  critical_review_file_name: critical_review.md # Standalone markdown file for the critical agent
+  include_logo_gallery: true # Whether to include a logo gallery in the main markdown report
+
+logos:
+  download_enabled: true # Whether to try downloading a logo for every profiled company
+  request_timeout_seconds: 15 # Timeout for website and image download requests
+  min_image_bytes: 200 # Ignore tiny files that are unlikely to be useful logos
+  max_image_bytes: 5000000 # Maximum image size to download per logo
+  try_logo_img: true # Try to detect <img> tags that look like logos
+  try_og_image: true # Try OpenGraph image metadata as a fallback
+  fallback_to_favicon: true # Fall back to favicon or apple-touch-icon if no logo is found
+  allowed_extensions: # Allowed output file extensions for stored logos
+    - .png
+    - .jpg
+    - .jpeg
+    - .svg
+    - .webp
+    - .ico
 
 scoring:
   explicit_agentic_weight: 0.5 # Extra score weight for companies with explicit agentic posture
   vertical_weight: 0.35 # Extra score weight for vertical-specialized companies
-  whitespace_baseline: 4.5 # Baseline saturation value for calculating "white space"
+  whitespace_baseline: 4.5 # Baseline saturation value for calculating white-space opportunity
   default_pain_weight: 2.5 # Default pain point weight for pipeline steps
-  pain_weights: # Custom weight assigned to each pipeline step to represent its market difficulty or "pain"
+  pain_weights: # Custom weight assigned to each pipeline step to represent its market difficulty or pain
     Target identification: 2.0
     Target validation: 2.2
     Assay development: 2.0

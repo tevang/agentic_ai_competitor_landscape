@@ -11,7 +11,7 @@ class VerificationAgent:
     """Verify step-level company inclusion decisions using retrieved evidence."""
 
     def __init__(self, llm: LLM, config: AppConfig, store: EvidenceStore) -> None:
-        """Store the services required for step-specific verification."""
+        """Store the services required for step-specific verification and cache reuse."""
 
         self.llm = llm
         self.config = config
@@ -24,6 +24,16 @@ class VerificationAgent:
         candidate_rationale: str,
     ) -> VerificationResult:
         """Verify whether a company should be included for a specific pipeline step."""
+
+        if self.config.search_protocol.reuse_existing_verifications:
+            cached = self.store.get_verification(
+                phase=step.phase,
+                step=step.step,
+                company_name=profile.name,
+                min_confidence=self.config.search_protocol.skip_llm_if_existing_verification_confidence_at_least,
+            )
+            if cached is not None:
+                return cached
 
         rag_docs = self.store.query(
             f"{profile.name} {step.phase} {step.step} {step.activities}",
@@ -46,6 +56,7 @@ Activities: {step.activities}
 COMPANY PROFILE:
 Name: {profile.name}
 Type: {profile.vertical_or_horizontal}
+Website: {profile.website or "unknown"}
 Specialization: {profile.specialization}
 Agentic posture: {profile.explicit_agentic_posture}
 
@@ -67,4 +78,12 @@ Return JSON:
 }}
 """
         data = self.llm.ask_json(prompt)
-        return VerificationResult(**data)
+        verdict = VerificationResult(**data)
+        self.store.save_verification(
+            phase=step.phase,
+            step=step.step,
+            company_name=profile.name,
+            candidate_rationale=candidate_rationale,
+            verdict=verdict,
+        )
+        return verdict

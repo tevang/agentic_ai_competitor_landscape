@@ -21,6 +21,8 @@ class EvidenceDoc(BaseModel):
     title: str = ""
     snippet: str = ""
     text: str = ""
+    company_name: str = ""
+    source_type: str = "web_search"
 
 
 class Candidate(BaseModel):
@@ -31,6 +33,7 @@ class Candidate(BaseModel):
     vertical_or_horizontal_guess: str = ""
     confidence: float = 0.5
     evidence_urls: list[str] = Field(default_factory=list)
+    source: str = "discovered"
 
 
 class CompanyProfile(BaseModel):
@@ -39,14 +42,17 @@ class CompanyProfile(BaseModel):
     name: str
     vertical_or_horizontal: str
     funding: str = ""
+    funding_rounds: str = ""
     employees: str = ""
     founded: str = ""
     headquarters: str = ""
     presence: list[str] = Field(default_factory=list)
+    website: str = ""
     specialization: str = ""
     explicit_agentic_posture: str = "unclear"
     confidence: float = 0.5
     evidence_urls: list[str] = Field(default_factory=list)
+    logo_path: str = ""
 
 
 class VerificationResult(BaseModel):
@@ -55,3 +61,34 @@ class VerificationResult(BaseModel):
     include: bool
     confidence: float
     reason: str
+
+
+class UserSeedCompany(BaseModel):
+    """A user-provided company record loaded from the optional seed-company CSV."""
+
+    company_name: str
+    classification: str = ""
+    website: str = ""
+    phase: str = ""
+    step: str = ""
+    notes: str = ""
+    funding: str = ""
+    funding_rounds: str = ""
+    employees: str = ""
+    founded: str = ""
+    headquarters: str = ""
+    presence: str = ""
+
+
+class CompanyResearchRequest(BaseModel):
+    """A normalized research request that can be passed to the research and enrichment agents."""
+
+    company_name: str
+    classification: str = ""
+    website: str = ""
+    phase: str = ""
+    step: str = ""
+    notes: str = ""
+    known_fields: dict[str, str] = Field(default_factory=dict)
+    preferred_domains: list[str] = Field(default_factory=list)
+    query_hints: list[str] = Field(default_factory=list)

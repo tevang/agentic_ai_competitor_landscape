@@ -1,8 +1,9 @@
-"""Text-normalization, JSON-recovery, and context-building helpers."""
+"""Text-normalization, JSON-recovery, URL helpers, and context-building utilities."""
 
 import hashlib
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from rapidfuzz import fuzz
 
@@ -17,7 +18,7 @@ def canonical_name(name: str) -> str:
 
 
 def sha1_hash(text: str) -> str:
-    """Return a SHA-1 hash for deterministic evidence-store document IDs."""
+    """Return a SHA-1 hash for deterministic document IDs."""
 
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
@@ -91,3 +92,45 @@ def fuzzy_dedupe_candidates(candidates: list[Candidate], threshold: int) -> list
             kept.append(candidate)
 
     return kept
+
+
+def domain_from_url(url: str) -> str:
+    """Extract a bare domain name from a URL or hostname-like string."""
+
+    if not url:
+        return ""
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    domain = (parsed.netloc or parsed.path or "").strip().lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
+def unique_preserve_order(items: list[str]) -> list[str]:
+    """Deduplicate a list of strings while preserving the original order."""
+
+    seen: set[str] = set()
+    output: list[str] = []
+    for item in items:
+        value = (item or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output
+
+
+def parse_delimited_list(text: str) -> list[str]:
+    """Parse a semicolon- or pipe-delimited text field into a clean list of strings."""
+
+    if not text:
+        return []
+    parts = re.split(r"[;|]", text)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def slugify_filename(text: str) -> str:
+    """Convert a free-form string into a filesystem-friendly slug."""
+
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", text.strip().lower()).strip("-")
+    return slug or "file"

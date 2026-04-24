@@ -3,20 +3,41 @@
 from lib.config import AppConfig
 from lib.llm import LLM
 from lib.models import Candidate, EvidenceDoc, PipelineStep
+from lib.retrieval.evidence_store import EvidenceStore
 from lib.utils.text_utils import evidence_to_context, fuzzy_dedupe_candidates
 
 
 class ExtractionAgent:
     """Extract and deduplicate candidate companies for a single pipeline step."""
 
-    def __init__(self, llm: LLM, config: AppConfig) -> None:
-        """Store the dependencies used for candidate extraction."""
+    def __init__(self, llm: LLM, config: AppConfig, store: EvidenceStore) -> None:
+        """Store the dependencies used for candidate extraction and cache reuse."""
 
         self.llm = llm
         self.config = config
+        self.store = store
 
-    def extract_candidates(self, step: PipelineStep, docs: list[EvidenceDoc]) -> list[Candidate]:
-        """Extract candidate competitors from step-level evidence documents."""
+    def extract_candidates(
+        self,
+        step: PipelineStep,
+        docs: list[EvidenceDoc],
+        seed_candidates: list[Candidate] | None = None,
+    ) -> list[Candidate]:
+        """Extract candidate competitors from step-level evidence documents and user seed hints."""
+
+        seed_candidates = seed_candidates or []
+
+        cached_candidates: list[Candidate] = []
+        if self.config.search_protocol.reuse_existing_candidates:
+            cached_candidates = self.store.get_candidates(step.phase, step.step)
+
+        if cached_candidates:
+            merged_candidates = fuzzy_dedupe_candidates(
+                cached_candidates + seed_candidates,
+                threshold=self.config.dedupe.fuzzy_threshold,
+            )
+            self.store.save_candidates(step.phase, step.step, merged_candidates)
+            return merged_candidates
 
         context = evidence_to_context(
             docs,
@@ -64,4 +85,9 @@ Return JSON:
             except Exception:
                 continue
 
-        return fuzzy_dedupe_candidates(candidates, threshold=self.config.dedupe.fuzzy_threshold)
+        merged_candidates = fuzzy_dedupe_candidates(
+            candidates + seed_candidates,
+            threshold=self.config.dedupe.fuzzy_threshold,
+        )
+        self.store.save_candidates(step.phase, step.step, merged_candidates)
+        return merged_candidates

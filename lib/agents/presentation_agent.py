@@ -20,8 +20,10 @@ class PresentationAgent:
         matrix_df: pd.DataFrame,
         profile_df: pd.DataFrame,
         gap_df: pd.DataFrame,
+        fact_analysis: str,
+        critical_review: str,
     ) -> str:
-        """Generate a concise market-gap memo from the structured data tables."""
+        """Generate a balanced market-gap memo from structured tables and analyst debate."""
 
         matrix_text = self._table_preview(
             matrix_df,
@@ -40,11 +42,16 @@ class PresentationAgent:
         )
 
         prompt = f"""
-You are a strategy analyst.
+You are a synthesis presenter.
 
-Write a concise market-gap memo for an investor/operator evaluating a startup building AI agents for biotech R&D.
+Combine a fact-driven analyst view with a critical devil's-advocate review into one investor-grade market-gap memo.
+Preserve objectivity, quantify uncertainty where possible, and prefer hard claims over hype.
 
-Use this data:
+FACT-DRIVEN ANALYST VIEW:
+{fact_analysis}
+
+CRITICAL AGENT REVIEW:
+{critical_review}
 
 COVERAGE MATRIX
 {matrix_text}
@@ -62,7 +69,7 @@ Output:
 - 3 product hypotheses for a new entrant
 - one paragraph on what to ask the startup in diligence
 
-Keep it sharp and practical.
+Keep it sharp, balanced, and practical.
 """
         return self.llm.ask(prompt)
 
@@ -71,6 +78,8 @@ Keep it sharp and practical.
         matrix_df: pd.DataFrame,
         profile_df: pd.DataFrame,
         gap_df: pd.DataFrame,
+        fact_analysis: str,
+        critical_review: str,
     ) -> str:
         """Generate a slide-by-slide presentation outline for the analysis."""
 
@@ -93,7 +102,12 @@ Keep it sharp and practical.
         prompt = f"""
 Create a {self.config.reporting.slide_count}-slide presentation outline for a competitive landscape review of agentic AI in drug discovery and development.
 
-Use:
+FACT-DRIVEN ANALYST VIEW:
+{fact_analysis}
+
+CRITICAL AGENT REVIEW:
+{critical_review}
+
 COVERAGE MATRIX
 {matrix_text}
 
@@ -107,7 +121,7 @@ For each slide, provide:
 - slide title
 - 3 to 5 bullets
 
-Make it suitable for presenting to a startup founder or hiring manager.
+Make it suitable for presenting to a startup founder, investor, or hiring manager.
 """
         return self.llm.ask(prompt)
 

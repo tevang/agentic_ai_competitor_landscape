@@ -31,13 +31,16 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
                 "company": profile.name,
                 "type": profile.vertical_or_horizontal,
                 "funding": profile.funding,
+                "funding_rounds": profile.funding_rounds,
                 "employees": profile.employees,
                 "founded": profile.founded,
                 "headquarters": profile.headquarters,
                 "presence": "; ".join(profile.presence),
+                "website": profile.website,
                 "specialization": profile.specialization,
                 "agentic_posture": profile.explicit_agentic_posture,
                 "confidence": round(profile.confidence, 2),
+                "logo_path": profile.logo_path,
             }
         )
 
@@ -47,13 +50,16 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
                 "company",
                 "type",
                 "funding",
+                "funding_rounds",
                 "employees",
                 "founded",
                 "headquarters",
                 "presence",
+                "website",
                 "specialization",
                 "agentic_posture",
                 "confidence",
+                "logo_path",
             ]
         )
 

@@ -1,0 +1,30 @@
+company_name,classification,website,phase,step,notes,headquarters
+Science Machine AI,,https://www.sciencemachine.ai/,,,,
+Future House,,https://www.futurehouse.org,,,,
+Xaira,,https://www.xaira.com/our-team,,,,
+Biomni,,https://biomni.stanford.edu/,,,,
+Causaly,,https://www.causaly.com/,,,,
+Inflexa AI,,https://inflexa.ai/,,,,
+Revilico,horizontal,https://revilico.bio/,,,only small molecule drug discovery phase,
+Owkin,,https://www.owkin.com/k-os/k-pro,,,,
+Formation Bio,,https://www.formation.bio/,Clinical,,,
+Helical,horizontal,https://www.helical.bio/,,,,
+Biossil,,,Clinical trials,,repurposing of failed drugs in clinical trials,
+GPT-Rosalind,,,,,vertical reasoning model and ChatGPT for Clinicians,
+Anthropic,,,,,Claude for Life Sciences (workflow breadth and acquisition),
+Amazon Web Services Bio Discovery,horizontal,,,,infrastructure and wet-lab loop; antibody focused,
+Potato,horizontal?,,,,,
+Plex Research,horizontal,https://www.plexresearch.com/,,,horizontal but small team,
+Iambic Therapeutics,,https://www.iambic.ai/,,,$1.7B deal with Takeda for AI drug discovery,
+Coincidence Labs,Vertical,,Hit discovery / early preclinical,Literature analysis for molecular prioritization,"Described as a hierarchical supervisor-style multi-agent system for early preclinical molecular prioritization; BTK inhibitor workflow case study. Affiliation lists San Francisco, CA, USA. Pages 9–10, 2.","San Francisco, CA, USA"
+Human Chemical,Vertical,,Preclinical safety / toxicology,In silico toxicity prediction,"ReAct-style agentic AI for chemical toxicity prediction; cashmeran endocrine-disruption case study. Affiliation lists San Francisco, CA, USA. Pages 10–11, 2.","San Francisco, CA, USA"
+Happy Potato,Vertical,,Assay development / translational preclinical support,"Protocol design, assay design, lab automation scripting","Multi-agent system for assay design and automation; the paper’s case study uses the name “Potato” for the platform and “Tater” for the agent, while the affiliation is “Happy Potato, Inc., Seattle, WA, USA.” Pages 11–13, 2.","Seattle, WA, USA"
+Kiin Bio,Vertical,,End-to-end discovery / target-to-hit support,Virtual scientist orchestration,"“Virtual Scientists” platform integrating >100 tools/models across biology, chemistry, and clinical domains; IPF preclinical program case study. Affiliation lists London, UK. Pages 13–14, 2.","London, UK"
+Augmented Nature,Vertical,,Target discovery / repurposing,Drug repurposing for rare diseases,MCP-driven repurposing workflow; SMA case study. Affiliation lists Berlin,
+"Onepot AI, Inc.",Vertical,,DMTA / make step,Automated small-molecule synthesis,"Hybrid virtual + physical agentic system for automated small-molecule synthesis; affiliation lists South San Francisco, CA, USA. Pages 14–15, 2.","South San Francisco, CA, USA"
+Plex Research,Horizontal,,Cross-pipeline decision support / target discovery,Search and hypothesis generation via focal graphs,"Provides search/reasoning infrastructure applicable across therapeutic areas, modalities, data types, and pipeline stages; Wnt-pathway oncology target case study. Affiliation lists Cambridge, MA, USA. Pages 15, 2.","Cambridge, MA, USA"
+Convexia Bio,Vertical,,Portfolio strategy / business development,Discovery-to-deal decisions,"Multi-agent workflow for small-molecule asset search/evaluation and licensing strategy; affiliation lists San Francisco, CA, USA. Pages 16, 2.","San Francisco, CA, USA"
+Lumos AI,Horizontal,,Broad discovery infrastructure,AI-agent platforms for bioinformatics research and workflow automation,"Mentioned in consortium affiliations only; no case study in the paper. The author bio for Shoman Kasbekar describes work on AI-agent platforms for bioinformatics/workflow automation; affiliation lists Lumos AI, San Francisco. Pages 3, 32.","San Francisco, CA, USA"
+Nome Bio,Unclear; likely vertical biotech/AI-bio,,Broad discovery infrastructure / biotech,Not specified,Mentioned only in consortium affiliations; the paper does not describe its product or pipeline role. Page 3.,"San Diego, CA, USA"
+Chipper,Unclear,,Broad discovery infrastructure / biotech tools,Not specified,Mentioned only in consortium affiliations; no case study or product description in the paper. Page 3.,"San Francisco, CA, USA"
+Pixl Bio AB,Unclear; likely vertical,,Drug discovery infrastructure / AI-bio,Not specified,Appears in author affiliation only; the publication does not describe its platform in the body. Page 2.,"Uppsala, Sweden"

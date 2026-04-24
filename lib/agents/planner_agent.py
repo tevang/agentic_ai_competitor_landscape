@@ -3,21 +3,28 @@
 from lib.config import AppConfig
 from lib.llm import LLM
 from lib.models import Candidate, PipelineStep
+from lib.retrieval.evidence_store import EvidenceStore
 
 
 class PlannerAgent:
     """Generate initial and refinement query plans for each pipeline step."""
 
-    def __init__(self, llm: LLM, config: AppConfig) -> None:
-        """Store dependencies required to generate search plans."""
+    def __init__(self, llm: LLM, config: AppConfig, store: EvidenceStore) -> None:
+        """Store dependencies required to generate and cache search plans."""
 
         self.llm = llm
         self.config = config
+        self.store = store
 
     def build_query_plan(self, step: PipelineStep) -> list[str]:
-        """Generate the initial set of web queries for a pipeline step."""
+        """Generate or reuse the initial set of web queries for a pipeline step."""
 
-        query_count = self.config.tavily.queries_per_step
+        if self.config.search_protocol.reuse_existing_query_plans:
+            cached = self.store.get_query_plan(step.phase, step.step)
+            if cached:
+                return cached[: self.config.get_active_search_profile().queries_per_step]
+
+        query_count = self.config.get_active_search_profile().queries_per_step
         prompt = f"""
 You are a search-planning agent for biotech competitive intelligence.
 
@@ -42,8 +49,9 @@ Return JSON:
 }}
 """
         data = self.llm.ask_json(prompt)
-        queries = data.get("queries", [])
-        return [query.strip() for query in queries if query.strip()][:query_count]
+        queries = [query.strip() for query in data.get("queries", []) if query.strip()][:query_count]
+        self.store.save_query_plan(step.phase, step.step, queries)
+        return queries
 
     def refine_queries(self, step: PipelineStep, candidates: list[Candidate]) -> list[str]:
         """Produce a lightweight refinement pass when the first search pass is too sparse."""
