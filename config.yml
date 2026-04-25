@@ -21,17 +21,58 @@ user_inputs:
 company_data_sources:
   funding: # Sites to prioritize when confirming total funding
     - https://www.crunchbase.com/
+    - https://craft.co/odoo
+    - https://craft.co
+    - https://wellfound.com
+    - https://app.dealroom.co
+    - https://www.sec.gov/search-filings
+    - https://biopharmguy.com
   funding_rounds: # Sites to prioritize when confirming number of funding rounds
     - https://www.crunchbase.com/
+    - https://wellfound.com
+    - https://app.dealroom.co
+    - https://www.sec.gov/search-filings
   employees: # Sites to prioritize when confirming employee count or employee range
     - https://www.crunchbase.com/
     - https://www.linkedin.com/company/
+    - https://craft.co
+    - https://wellfound.com
+    - https://app.dealroom.co
+    - https://www.sec.gov/search-filings
+    - https://clutch.co
   founded: # Sites to prioritize when confirming founding year
     - https://www.crunchbase.com/
+    - https://craft.co
+    - https://app.dealroom.co
+    - https://api.opencorporates.com
+    - https://developer.company-information.service.gov.uk
+    - https://www.sec.gov/search-filings
+    - https://www.wikidata.org
+    - https://clutch.co
   headquarters: # Sites to prioritize when confirming headquarters location
     - https://www.crunchbase.com/
+    - https://craft.co
+    - https://wellfound.com
+    - https://app.dealroom.co
+    - https://api.opencorporates.com
+    - https://developer.company-information.service.gov.uk
+    - https://www.sec.gov/search-filings
+    - https://www.gleif.org
+    - https://www.wikidata.org
+    - https://biopharmguy.com
+    - https://clutch.co
   presence: # Sites to prioritize when confirming office footprint or broader geographical presence
     - https://www.crunchbase.com/
+    - https://craft.co
+    - https://wellfound.com
+    - https://app.dealroom.co
+    - https://api.opencorporates.com
+    - https://developer.company-information.service.gov.uk
+    - https://www.sec.gov/search-filings
+    - https://www.gleif.org
+    - https://www.wikidata.org
+    - https://biopharmguy.com
+    - https://clutch.co
 
 openai:
   api_key_env_var: OPENAI_API_KEY # Environment variable name for the OpenAI API key
@@ -41,19 +82,48 @@ openai:
   retry_wait_max_seconds: 15 # Maximum wait time between retries in seconds
 
 search_protocol:
-  active_rigor: standard # Search preset to use: light, standard, or deep
+  active_rigor: deep # Search preset to use: light, standard, or deep
   reuse_existing_step_evidence: true # Reuse previously stored step-level evidence before launching Tavily searches
   reuse_existing_company_evidence: true # Reuse previously stored company-level evidence before launching Tavily searches
   reuse_existing_profiles: true # Reuse previously stored company profiles before asking the LLM again
-  reuse_existing_query_plans: true # Reuse cached query plans for the same pipeline step
-  reuse_existing_candidates: true # Reuse cached extracted candidates for the same pipeline step
-  reuse_existing_verifications: true # Reuse cached step/company verification decisions
+  reuse_existing_query_plans: true # Reuse cached extracted query plans for the same pipeline step signature
+  reuse_existing_candidates: true # Reuse cached extracted candidates for the same pipeline step signature
+  reuse_existing_verifications: true # Reuse cached step/company verification decisions for the same pipeline step signature
   skip_web_if_existing_step_docs_at_least: 12 # Skip step-level web search if at least this many cached evidence docs exist
   skip_web_if_existing_company_docs_at_least: 10 # Skip company-level web search if at least this many cached evidence docs exist
   skip_llm_if_existing_profile_confidence_at_least: 0.75 # Reuse a cached company profile if confidence is already high enough
   skip_llm_if_existing_verification_confidence_at_least: 0.75 # Reuse a cached verification decision if confidence is already high enough
   prefer_cached_url_text: true # Reuse previously stored page text for a URL before fetching it again
   allow_web_search_after_cache_hit: false # If false, strong cache hits prevent additional Tavily calls
+
+retrieval_guard:
+  enabled: true # Enable clean-text quality checks before page text enters the pipeline
+  min_clean_text_chars: 350 # Minimum cleaned text length before a page is considered substantial
+  detect_cookie_banners: true # Detect cookie banner boilerplate in extracted text or HTML
+  detect_consent_walls: true # Detect consent walls that suppress or pollute article text
+  detect_captcha_pages: true # Detect CAPTCHA-style pages and mark them as blocked
+  detect_challenge_pages: true # Detect Cloudflare or anti-bot challenge pages and mark them as blocked
+  detect_javascript_placeholders: true # Detect JavaScript placeholders such as "enable JavaScript" or "loading app"
+  strip_cookie_banner_lines: true # Strip obvious cookie-banner phrases from otherwise valid content
+  safe_fail_on_protected_pages: true # Never attempt challenge or CAPTCHA bypass; mark such pages as blocked
+  allow_browser_render_fallback: true # Allow a browser-render fallback for normal JS-rendered pages only
+  browser_render_timeout_ms: 15000 # Timeout for Playwright page rendering when the fallback is enabled
+  browser_wait_until: domcontentloaded # Playwright wait condition used by the optional JS-render fallback
+  browser_headless: true # Run the browser-render fallback in headless mode
+  browser_user_agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36 # User-Agent string used by the optional browser-render fallback
+
+taxonomy:
+  enforce: true # Force verified company-step links into the controlled domain taxonomy before analysis
+  include_in_planner_prompt: true # Show the canonical taxonomy target in planner prompts
+  include_in_verification_prompt: true # Show the canonical taxonomy target in verification prompts
+  canonical_phases: # Controlled top-level lifecycle buckets
+    - Discovery
+    - Preclinical
+    - Clinical
+    - Regulatory
+    - Manufacturing
+    - Pharmacovigilance
+    - Commercial/Lifecycle
 
 # Tavily knobs are grouped here so search rigor can be tuned without editing Python.
 tavily:
@@ -77,7 +147,7 @@ tavily:
   trafilatura_include_links: false # Whether to include hyperlinks in extracted text
   trafilatura_include_images: false # Whether to include image metadata in extracted text
   search_cache_size: 512 # Number of Tavily search responses to cache in memory
-  fetch_cache_size: 1024 # Number of fetched page contents to cache in memory
+  fetch_cache_size: 1024 # Number of fetched page contents or rendered results to cache in memory
   profiles:
     light: # Fastest and cheapest preset; good for an exploratory pass
       search_depth: basic # Search depth preset for Tavily

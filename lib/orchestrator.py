@@ -9,6 +9,7 @@ from lib.agents.fact_driven_analyst_agent import FactDrivenAnalystAgent
 from lib.agents.planner_agent import PlannerAgent
 from lib.agents.presentation_agent import PresentationAgent
 from lib.agents.research_agent import ResearchAgent
+from lib.agents.taxonomy_enforcement_agent import TaxonomyEnforcementAgent
 from lib.agents.user_company_intake_agent import UserCompanyIntakeAgent
 from lib.agents.verification_agent import VerificationAgent
 from lib.analytics.scoring import build_matrix_df, build_profile_df, compute_gap_scores
@@ -28,6 +29,7 @@ class CompetitiveLandscapeOrchestrator:
         planner_agent: PlannerAgent,
         research_agent: ResearchAgent,
         extraction_agent: ExtractionAgent,
+        taxonomy_enforcement_agent: TaxonomyEnforcementAgent,
         enrichment_agent: EnrichmentAgent,
         verification_agent: VerificationAgent,
         presentation_agent: PresentationAgent,
@@ -43,6 +45,7 @@ class CompetitiveLandscapeOrchestrator:
         self.planner_agent = planner_agent
         self.research_agent = research_agent
         self.extraction_agent = extraction_agent
+        self.taxonomy_enforcement_agent = taxonomy_enforcement_agent
         self.enrichment_agent = enrichment_agent
         self.verification_agent = verification_agent
         self.presentation_agent = presentation_agent
@@ -146,6 +149,8 @@ class CompetitiveLandscapeOrchestrator:
         if self.config.runtime.verbose:
             print(f"\n=== Processing: {step.phase} -> {step.step} ===")
 
+        step_taxonomy = self.taxonomy_enforcement_agent.map_step(step)
+
         queries = self.planner_agent.build_query_plan(step)
         docs = self.research_agent.collect_step_evidence(step, queries)
         candidates = self.extraction_agent.extract_candidates(step, docs, seed_candidates=step_seed_candidates)
@@ -177,13 +182,21 @@ class CompetitiveLandscapeOrchestrator:
             profile = profile_cache[cache_key]
 
             try:
-                verdict = self.verification_agent.verify_company_for_step(step, profile, candidate.rationale)
+                verdict = self.verification_agent.verify_company_for_step(
+                    step=step,
+                    profile=profile,
+                    candidate_rationale=candidate.rationale,
+                    taxonomy_assignment=step_taxonomy,
+                )
             except Exception as exc:
                 if self.config.runtime.verbose:
                     print(f"  [warn] verification failed for {profile.name}: {exc}")
                 continue
 
             if verdict.include:
+                profile = self.taxonomy_enforcement_agent.apply_step_taxonomy(profile, step_taxonomy)
+                profile_cache[cache_key] = profile
+
                 records.append(
                     {
                         "phase": step.phase,
@@ -199,6 +212,8 @@ class CompetitiveLandscapeOrchestrator:
                         "website": profile.website,
                         "specialization": profile.specialization,
                         "agentic_posture": profile.explicit_agentic_posture,
+                        "taxonomy_primary_phase": step_taxonomy.primary_phase,
+                        "taxonomy_primary_subcategory": step_taxonomy.primary_subcategory,
                         "confidence": round(min(candidate.confidence, profile.confidence, verdict.confidence), 2),
                         "reason": verdict.reason,
                     }

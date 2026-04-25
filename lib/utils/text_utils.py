@@ -23,6 +23,12 @@ def sha1_hash(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
+def build_step_signature(phase: str, step: str, activities: str) -> str:
+    """Build a deterministic signature for a pipeline step including its activity text."""
+
+    return sha1_hash(f"{phase}|{step}|{clean_text(activities)}")
+
+
 def clean_text(text: str | None) -> str:
     """Collapse whitespace and safely normalize optional text into a single line."""
 

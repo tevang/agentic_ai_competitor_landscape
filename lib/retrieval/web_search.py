@@ -9,7 +9,10 @@ import trafilatura
 from tavily import TavilyClient
 
 from lib.config import AppConfig
-from lib.utils.text_utils import clean_text, unique_preserve_order
+from lib.models import PageFetchResult
+from lib.retrieval.browser_render import BrowserRenderService
+from lib.retrieval.page_quality import assess_extracted_content, should_try_browser_render
+from lib.utils.text_utils import unique_preserve_order
 
 
 class WebSearchService:
@@ -25,7 +28,8 @@ class WebSearchService:
         self.config = config
         self.client = TavilyClient(api_key=api_key)
         self.search_cache: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
-        self.fetch_cache: OrderedDict[str, str] = OrderedDict()
+        self.fetch_cache: OrderedDict[str, PageFetchResult] = OrderedDict()
+        self.browser_renderer = BrowserRenderService(config)
 
     def search(
         self,
@@ -52,28 +56,59 @@ class WebSearchService:
         self._set_cached_value(self.search_cache, cache_key, results, self.config.tavily.search_cache_size)
         return results
 
-    def fetch_page_text(self, url: str) -> str:
-        """Fetch, extract, and truncate page text for a single URL."""
+    def fetch_page(self, url: str) -> PageFetchResult:
+        """Fetch, assess, and optionally browser-render a page."""
 
         cached = self._get_cached_value(self.fetch_cache, url)
         if cached is not None:
             return cached
 
         try:
-            downloaded = trafilatura.fetch_url(url)
-            if not downloaded:
-                return ""
+            downloaded = trafilatura.fetch_url(url) or ""
+            extracted = ""
+            if downloaded:
+                extracted = trafilatura.extract(
+                    downloaded,
+                    include_links=self.config.tavily.trafilatura_include_links,
+                    include_images=self.config.tavily.trafilatura_include_images,
+                ) or ""
 
-            extracted = trafilatura.extract(
-                downloaded,
-                include_links=self.config.tavily.trafilatura_include_links,
-                include_images=self.config.tavily.trafilatura_include_images,
+            assessment = assess_extracted_content(
+                url=url,
+                raw_text=extracted,
+                raw_html=downloaded,
+                config=self.config.retrieval_guard,
             )
-            cleaned = clean_text(extracted)[: self.config.get_active_search_profile().page_text_char_limit]
-            self._set_cached_value(self.fetch_cache, url, cleaned, self.config.tavily.fetch_cache_size)
-            return cleaned
-        except Exception:
-            return ""
+            result = PageFetchResult(
+                text=assessment.cleaned_text if assessment.is_usable else "",
+                extraction_status=assessment.status,
+                blocked_reason=assessment.blocked_reason,
+                render_mode="trafilatura",
+                quality_score=assessment.quality_score,
+            )
+
+            if should_try_browser_render(assessment, self.config.retrieval_guard):
+                browser_result = self.browser_renderer.render_page(url)
+                if browser_result.text or browser_result.quality_score > result.quality_score:
+                    result = browser_result
+
+            self._set_cached_value(self.fetch_cache, url, result, self.config.tavily.fetch_cache_size)
+            return result
+        except Exception as exc:
+            result = PageFetchResult(
+                text="",
+                extraction_status="fetch_error",
+                blocked_reason=str(exc),
+                render_mode="trafilatura",
+                quality_score=0.0,
+            )
+            self._set_cached_value(self.fetch_cache, url, result, self.config.tavily.fetch_cache_size)
+            return result
+
+    def fetch_page_text(self, url: str) -> str:
+        """Fetch clean page text for a single URL for legacy call sites."""
+
+        return self.fetch_page(url).text
 
     def _build_search_payload(
         self,
@@ -85,8 +120,12 @@ class WebSearchService:
         """Build the Tavily request payload from the YAML configuration and method overrides."""
 
         profile = self.config.get_active_search_profile()
-        include_domains = unique_preserve_order((self.config.tavily.include_domains or []) + (include_domains_override or []))
-        exclude_domains = unique_preserve_order((self.config.tavily.exclude_domains or []) + (exclude_domains_override or []))
+        include_domains = unique_preserve_order(
+            (self.config.tavily.include_domains or []) + (include_domains_override or [])
+        )
+        exclude_domains = unique_preserve_order(
+            (self.config.tavily.exclude_domains or []) + (exclude_domains_override or [])
+        )
 
         payload: dict[str, Any] = {
             "query": query,

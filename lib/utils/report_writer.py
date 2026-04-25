@@ -116,7 +116,7 @@ class ReportWriter:
                 "",
                 "# COMPANY PROFILES",
                 "",
-                "> Profile cards with compact company facts, official websites, and downloaded logos when available.",
+                "> Profile cards with compact company facts, official websites, downloaded logos when available, and controlled taxonomy assignments.",
                 "",
                 self._render_company_profiles_table(profile_df),
                 "",
@@ -176,7 +176,7 @@ class ReportWriter:
         return view.to_markdown(index=False)
 
     def _render_company_profiles_table(self, profile_df: pd.DataFrame) -> str:
-        """Render the company profile table with inline logo previews and website links."""
+        """Render the company profile table with inline logo previews, taxonomy labels, and website links."""
 
         if profile_df.empty:
             return "_No company profiles yet._"
@@ -189,6 +189,8 @@ class ReportWriter:
             "logo",
             "company",
             "type",
+            "taxonomy_primary_phase",
+            "taxonomy_primary_subcategory",
             "founded",
             "headquarters",
             "funding",
@@ -198,7 +200,13 @@ class ReportWriter:
             "specialization",
             "agentic_posture",
         ]
-        renamed = view[columns].rename(columns={"website_link": "website"})
+        renamed = view[columns].rename(
+            columns={
+                "website_link": "website",
+                "taxonomy_primary_phase": "taxonomy_phase",
+                "taxonomy_primary_subcategory": "taxonomy_subcategory",
+            }
+        )
         return renamed.to_markdown(index=False)
 
     def _render_gap_scores_section(self, gap_df: pd.DataFrame) -> str:

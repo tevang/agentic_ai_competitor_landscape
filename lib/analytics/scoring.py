@@ -41,6 +41,10 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
                 "agentic_posture": profile.explicit_agentic_posture,
                 "confidence": round(profile.confidence, 2),
                 "logo_path": profile.logo_path,
+                "taxonomy_primary_phase": profile.taxonomy_primary_phase,
+                "taxonomy_primary_subcategory": profile.taxonomy_primary_subcategory,
+                "taxonomy_phase_labels": "; ".join(profile.taxonomy_phase_labels),
+                "taxonomy_subcategory_labels": "; ".join(profile.taxonomy_subcategory_labels),
             }
         )
 
@@ -60,6 +64,10 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
                 "agentic_posture",
                 "confidence",
                 "logo_path",
+                "taxonomy_primary_phase",
+                "taxonomy_primary_subcategory",
+                "taxonomy_phase_labels",
+                "taxonomy_subcategory_labels",
             ]
         )
 

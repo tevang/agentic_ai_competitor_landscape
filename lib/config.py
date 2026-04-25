@@ -128,6 +128,47 @@ class SearchProtocolConfig(StrictConfigModel):
     allow_web_search_after_cache_hit: bool = False
 
 
+class RetrievalGuardConfig(StrictConfigModel):
+    """Configuration for safe extraction-quality checks and optional browser-render fallback."""
+
+    enabled: bool = True
+    min_clean_text_chars: int = 350
+    detect_cookie_banners: bool = True
+    detect_consent_walls: bool = True
+    detect_captcha_pages: bool = True
+    detect_challenge_pages: bool = True
+    detect_javascript_placeholders: bool = True
+    strip_cookie_banner_lines: bool = True
+    safe_fail_on_protected_pages: bool = True
+    allow_browser_render_fallback: bool = True
+    browser_render_timeout_ms: int = 15_000
+    browser_wait_until: str = "domcontentloaded"
+    browser_headless: bool = True
+    browser_user_agent: str = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    )
+
+
+class TaxonomyConfig(StrictConfigModel):
+    """Configuration for controlled taxonomy enforcement."""
+
+    enforce: bool = True
+    include_in_planner_prompt: bool = True
+    include_in_verification_prompt: bool = True
+    canonical_phases: list[str] = Field(
+        default_factory=lambda: [
+            "Discovery",
+            "Preclinical",
+            "Clinical",
+            "Regulatory",
+            "Manufacturing",
+            "Pharmacovigilance",
+            "Commercial/Lifecycle",
+        ]
+    )
+
+
 class RagConfig(StrictConfigModel):
     """Configuration for the evidence store and retrieval context sizes."""
 
@@ -209,6 +250,8 @@ class AppConfig(StrictConfigModel):
     company_data_sources: CompanyDataSourcesConfig
     openai: OpenAIConfig
     search_protocol: SearchProtocolConfig
+    retrieval_guard: RetrievalGuardConfig
+    taxonomy: TaxonomyConfig
     tavily: TavilyConfig
     rag: RagConfig
     react: ReactConfig
