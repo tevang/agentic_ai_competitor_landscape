@@ -11,11 +11,22 @@ class PipelineStep(BaseModel):
     activities: str
 
 
+class PageFetchResult(BaseModel):
+    """A normalized result from page fetching and extraction-quality assessment."""
+
+    text: str = ""
+    extraction_status: str = "empty"
+    blocked_reason: str = ""
+    render_mode: str = "trafilatura"
+    quality_score: float = 0.0
+
+
 class EvidenceDoc(BaseModel):
     """A normalized evidence document gathered from search results or fetched pages."""
 
     phase: str
     step: str
+    activities_signature: str = ""
     query: str
     url: str
     title: str = ""
@@ -23,6 +34,10 @@ class EvidenceDoc(BaseModel):
     text: str = ""
     company_name: str = ""
     source_type: str = "web_search"
+    extraction_status: str = "not_fetched"
+    blocked_reason: str = ""
+    render_mode: str = "trafilatura"
+    quality_score: float = 0.0
 
 
 class Candidate(BaseModel):
@@ -34,6 +49,22 @@ class Candidate(BaseModel):
     confidence: float = 0.5
     evidence_urls: list[str] = Field(default_factory=list)
     source: str = "discovered"
+
+    # Product-aware extraction fields.
+    # name should be the owning company/vendor whenever possible.
+    owning_company_name: str = ""
+    product_or_solution: str = ""
+    evidence_role: str = "target_vendor"  # target_vendor|publisher_only|customer|partner|unclear
+
+
+class TaxonomyAssignment(BaseModel):
+    """A controlled-taxonomy assignment for a pipeline step or company capability."""
+
+    primary_phase: str = ""
+    primary_subcategory: str = ""
+    phase_labels: list[str] = Field(default_factory=list)
+    subcategory_labels: list[str] = Field(default_factory=list)
+    rationale: str = ""
 
 
 class CompanyProfile(BaseModel):
@@ -53,6 +84,11 @@ class CompanyProfile(BaseModel):
     confidence: float = 0.5
     evidence_urls: list[str] = Field(default_factory=list)
     logo_path: str = ""
+    taxonomy_primary_phase: str = ""
+    taxonomy_primary_subcategory: str = ""
+    taxonomy_phase_labels: list[str] = Field(default_factory=list)
+    taxonomy_subcategory_labels: list[str] = Field(default_factory=list)
+    products_or_solutions: list[str] = Field(default_factory=list)
 
 
 class VerificationResult(BaseModel):
@@ -92,3 +128,8 @@ class CompanyResearchRequest(BaseModel):
     known_fields: dict[str, str] = Field(default_factory=dict)
     preferred_domains: list[str] = Field(default_factory=list)
     query_hints: list[str] = Field(default_factory=list)
+
+    # Candidate context carried forward from extraction.
+    product_or_solution: str = ""
+    candidate_rationale: str = ""
+    candidate_evidence_urls: list[str] = Field(default_factory=list)

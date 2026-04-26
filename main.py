@@ -11,6 +11,7 @@ from lib.agents.fact_driven_analyst_agent import FactDrivenAnalystAgent
 from lib.agents.planner_agent import PlannerAgent
 from lib.agents.presentation_agent import PresentationAgent
 from lib.agents.research_agent import ResearchAgent
+from lib.agents.taxonomy_enforcement_agent import TaxonomyEnforcementAgent
 from lib.agents.user_company_intake_agent import UserCompanyIntakeAgent
 from lib.agents.verification_agent import VerificationAgent
 from lib.config import load_config
@@ -66,6 +67,7 @@ def main() -> None:
     planner_agent = PlannerAgent(llm, config, store)
     research_agent = ResearchAgent(config, web_search, store)
     extraction_agent = ExtractionAgent(llm, config, store)
+    taxonomy_enforcement_agent = TaxonomyEnforcementAgent(config, store)
     user_company_intake_agent = UserCompanyIntakeAgent(config)
     enrichment_agent = EnrichmentAgent(llm, config, research_agent, store)
     verification_agent = VerificationAgent(llm, config, store)
@@ -80,6 +82,7 @@ def main() -> None:
         planner_agent=planner_agent,
         research_agent=research_agent,
         extraction_agent=extraction_agent,
+        taxonomy_enforcement_agent=taxonomy_enforcement_agent,
         enrichment_agent=enrichment_agent,
         verification_agent=verification_agent,
         presentation_agent=presentation_agent,

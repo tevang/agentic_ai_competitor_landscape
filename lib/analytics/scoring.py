@@ -12,11 +12,13 @@ def build_matrix_df(records_df: pd.DataFrame) -> pd.DataFrame:
     if records_df.empty:
         return pd.DataFrame(columns=["phase", "step", "competitors"])
 
+    company_column = "competitor_label" if "competitor_label" in records_df.columns else "company"
+
     matrix_df = (
-        records_df.groupby(["phase", "step"])["company"]
-        .apply(lambda series: "; ".join(sorted(set(series))))
+        records_df.groupby(["phase", "step"])[company_column]
+        .apply(lambda series: "; ".join(sorted(set(str(value) for value in series if str(value).strip()))))
         .reset_index()
-        .rename(columns={"company": "competitors"})
+        .rename(columns={company_column: "competitors"})
     )
     return matrix_df.sort_values(["phase", "step"])
 
@@ -25,10 +27,18 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
     """Convert the in-memory company-profile cache into a dataframe."""
 
     rows: list[dict[str, str | float]] = []
+    seen_company_keys: set[str] = set()
+
     for profile in profile_cache.values():
+        company_key = profile.name.strip().lower()
+        if company_key in seen_company_keys:
+            continue
+        seen_company_keys.add(company_key)
+
         rows.append(
             {
                 "company": profile.name,
+                "products_or_solutions": "; ".join(profile.products_or_solutions),
                 "type": profile.vertical_or_horizontal,
                 "funding": profile.funding,
                 "funding_rounds": profile.funding_rounds,
@@ -41,6 +51,10 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
                 "agentic_posture": profile.explicit_agentic_posture,
                 "confidence": round(profile.confidence, 2),
                 "logo_path": profile.logo_path,
+                "taxonomy_primary_phase": profile.taxonomy_primary_phase,
+                "taxonomy_primary_subcategory": profile.taxonomy_primary_subcategory,
+                "taxonomy_phase_labels": "; ".join(profile.taxonomy_phase_labels),
+                "taxonomy_subcategory_labels": "; ".join(profile.taxonomy_subcategory_labels),
             }
         )
 
@@ -48,6 +62,7 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
         return pd.DataFrame(
             columns=[
                 "company",
+                "products_or_solutions",
                 "type",
                 "funding",
                 "funding_rounds",
@@ -60,6 +75,10 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
                 "agentic_posture",
                 "confidence",
                 "logo_path",
+                "taxonomy_primary_phase",
+                "taxonomy_primary_subcategory",
+                "taxonomy_phase_labels",
+                "taxonomy_subcategory_labels",
             ]
         )
 
@@ -82,7 +101,8 @@ def compute_gap_scores(records_df: pd.DataFrame, steps: list[PipelineStep], conf
             else pd.DataFrame()
         )
 
-        competitor_count = int(subset["company"].nunique()) if not subset.empty else 0
+        competitor_basis = "company"
+        competitor_count = int(subset[competitor_basis].nunique()) if not subset.empty else 0
         explicit_count = int((subset["agentic_posture"] == "explicit").sum()) if not subset.empty else 0
         vertical_count = int((subset["vertical_or_horizontal"] == "vertical").sum()) if not subset.empty else 0
         avg_confidence = float(subset["confidence"].mean()) if not subset.empty else 0.0

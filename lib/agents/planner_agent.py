@@ -1,9 +1,12 @@
 """Planning agent that converts a pipeline step into a concrete search plan."""
 
 from lib.config import AppConfig
+from lib.discovery.query_factory import build_discovery_queries
 from lib.llm import LLM
 from lib.models import Candidate, PipelineStep
 from lib.retrieval.evidence_store import EvidenceStore
+from lib.taxonomy.schema import format_taxonomy_target_for_step
+from lib.utils.text_utils import build_step_signature, unique_preserve_order
 
 
 class PlannerAgent:
@@ -17,14 +20,25 @@ class PlannerAgent:
         self.store = store
 
     def build_query_plan(self, step: PipelineStep) -> list[str]:
-        """Generate or reuse the initial set of web queries for a pipeline step."""
+        """Generate or reuse a broad web-query plan for a pipeline step."""
+
+        step_signature = build_step_signature(step.phase, step.step, step.activities)
+        max_total_queries = self.config.discovery.max_total_queries_per_step
+        cached: list[str] = []
 
         if self.config.search_protocol.reuse_existing_query_plans:
-            cached = self.store.get_query_plan(step.phase, step.step)
-            if cached:
-                return cached[: self.config.get_active_search_profile().queries_per_step]
+            cached = self.store.get_query_plan(step.phase, step.step, step_signature)
+            if cached and not self.config.search_protocol.allow_web_search_after_cache_hit:
+                return cached[:max_total_queries]
 
         query_count = self.config.get_active_search_profile().queries_per_step
+        taxonomy_target = (
+            format_taxonomy_target_for_step(step.phase, step.step)
+            if self.config.taxonomy.include_in_planner_prompt
+            else "Not provided."
+        )
+
+        llm_queries: list[str] = []
         prompt = f"""
 You are a search-planning agent for biotech competitive intelligence.
 
@@ -33,35 +47,56 @@ Phase: {step.phase}
 Step: {step.step}
 Activities: {step.activities}
 
+CONTROLLED TAXONOMY TARGET:
+{taxonomy_target}
+
 Task:
-Generate {query_count} web search queries to find companies that build, market, or materially deploy AI or agentic solutions relevant to this exact step.
+Generate {query_count} web search queries to find companies that build, market, or materially deploy AI, agentic, autonomous, machine-learning, NLP, generative-AI, or workflow-automation solutions relevant to this exact step.
 
 Requirements:
-- Include one query using "agentic AI" or "AI scientist" language.
-- Include one query using broader "AI platform" or "machine learning" language.
-- Include one query aimed at startup/vendor discovery.
-- Include one query aimed at product pages / solution pages.
-- Focus on biotech / pharma / drug discovery / clinical / regulatory relevance.
+- Use the Key activities text aggressively: mine operational terms, acronyms, standards, systems, deliverables, workflows, and compliance phrases from it.
+- Include incumbent enterprise platforms as well as AI-native startups.
+- Include BPO, CRO, and systems-integrator offerings only when they have productized AI/automation capability for the step.
+- Include one query using "agentic AI" or "AI agent" language.
+- Include one query using broader "AI platform", "automation", "machine learning", or "NLP" language.
+- Include one query aimed at vendor/platform discovery.
+- Include one query aimed at product pages or solution pages.
+- Focus on biotech / pharma / drug discovery / clinical / regulatory / safety / manufacturing relevance as appropriate.
+- Do not drift outside the controlled taxonomy target.
 
 Return JSON:
 {{
   "queries": ["...", "...", "..."]
 }}
 """
-        data = self.llm.ask_json(prompt)
-        queries = [query.strip() for query in data.get("queries", []) if query.strip()][:query_count]
-        self.store.save_query_plan(step.phase, step.step, queries)
+        try:
+            data = self.llm.ask_json(prompt)
+            llm_queries = [query.strip() for query in data.get("queries", []) if query.strip()]
+        except Exception:
+            llm_queries = []
+
+        auto_queries: list[str] = []
+        if self.config.discovery.deterministic_queries_enabled:
+            auto_queries = build_discovery_queries(
+                step=step,
+                max_queries=self.config.discovery.max_auto_queries_per_step,
+                max_terms=self.config.discovery.max_search_terms_per_step,
+            )
+
+        queries = unique_preserve_order(cached + llm_queries + auto_queries)[:max_total_queries]
+        self.store.save_query_plan(step.phase, step.step, step_signature, queries)
         return queries
 
     def refine_queries(self, step: PipelineStep, candidates: list[Candidate]) -> list[str]:
-        """Produce a lightweight refinement pass when the first search pass is too sparse."""
+        """Produce a generic refinement pass when the first search pass is too sparse."""
 
         seen = ", ".join(candidate.name for candidate in candidates[:5]) or "none"
         templates = [
-            f'"{step.step}" biotech AI startup',
-            f'"{step.step}" pharma AI platform company',
-            f'"{step.phase}" "{step.step}" machine learning vendor',
-            f'"{step.step}" "drug development" "AI" company',
+            f'"{step.step}" "AI" "software vendor" pharma',
+            f'"{step.step}" "automation platform" "life sciences"',
+            f'"{step.step}" "machine learning" "company"',
+            f'"{step.step}" "product page" "AI" "biopharma"',
             f'"{step.step}" "agentic AI" pharma {seen}',
+            f'"{step.step}" "NLP" "workflow automation" "vendor"',
         ]
         return templates[: self.config.react.refinement_query_count]

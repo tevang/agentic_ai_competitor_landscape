@@ -43,7 +43,7 @@ class EvidenceStore:
             document_text = (doc.text or doc.snippet or "")[: self.rag_config.chroma_document_char_limit]
             content_hash = sha1_hash(document_text)
             doc_id = sha1_hash(
-                f"evidence|{doc.phase}|{doc.step}|{doc.company_name}|{doc.query}|{doc.url}|{content_hash}"
+                f"evidence|{doc.phase}|{doc.step}|{doc.activities_signature}|{doc.company_name}|{doc.query}|{doc.url}|{content_hash}"
             )
             ids.append(doc_id)
             documents.append(document_text)
@@ -51,6 +51,7 @@ class EvidenceStore:
                 {
                     "phase": doc.phase,
                     "step": doc.step,
+                    "activities_signature": doc.activities_signature,
                     "query": doc.query,
                     "url": doc.url,
                     "title": doc.title,
@@ -59,13 +60,17 @@ class EvidenceStore:
                     "company_key": canonical_name(doc.company_name) if doc.company_name else "",
                     "source_type": doc.source_type,
                     "domain": domain_from_url(doc.url),
+                    "extraction_status": doc.extraction_status,
+                    "blocked_reason": doc.blocked_reason[:500],
+                    "render_mode": doc.render_mode,
+                    "quality_score": doc.quality_score,
                     "saved_at": saved_at,
                 }
             )
 
         self.evidence_collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
 
-    def query(self, text: str, n_results: int | None = None) -> list[dict[str, str]]:
+    def query(self, text: str, n_results: int | None = None) -> list[dict[str, Any]]:
         """Query the evidence collection with vector similarity and return normalized dictionaries."""
 
         try:
@@ -85,61 +90,78 @@ class EvidenceStore:
         docs = result.get("documents", [[]])[0]
         metas = result.get("metadatas", [[]])[0]
 
-        output: list[dict[str, str]] = []
+        output: list[dict[str, Any]] = []
         for doc, meta in zip(docs, metas):
             output.append(
                 {
                     "text": doc,
                     "phase": meta.get("phase", ""),
                     "step": meta.get("step", ""),
+                    "activities_signature": meta.get("activities_signature", ""),
                     "query": meta.get("query", ""),
                     "url": meta.get("url", ""),
                     "title": meta.get("title", ""),
                     "snippet": meta.get("snippet", ""),
                     "company_name": meta.get("company_name", ""),
                     "source_type": meta.get("source_type", ""),
+                    "extraction_status": meta.get("extraction_status", ""),
+                    "blocked_reason": meta.get("blocked_reason", ""),
+                    "render_mode": meta.get("render_mode", ""),
+                    "quality_score": meta.get("quality_score", 0.0),
                 }
             )
 
         return output
 
-    def get_step_evidence(self, phase: str, step: str, limit: int = 12) -> list[dict[str, str]]:
+    def get_step_evidence(
+        self,
+        phase: str,
+        step: str,
+        step_signature: str = "",
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
         """Return cached evidence docs for a pipeline step without vector ranking."""
 
-        where = self._build_where([{"phase": phase}, {"step": step}])
+        filters = [{"phase": phase}, {"step": step}]
+        if step_signature:
+            filters.append({"activities_signature": step_signature})
+        where = self._build_where(filters)
         records = self._get_records(self.evidence_collection, where=where, limit=limit)
         return self._normalize_evidence_records(records)
 
-    def get_company_evidence(self, company_name: str, limit: int = 10) -> list[dict[str, str]]:
+    def get_company_evidence(self, company_name: str, limit: int = 10) -> list[dict[str, Any]]:
         """Return cached evidence docs for a company without vector ranking."""
 
         where = {"company_key": canonical_name(company_name)}
         records = self._get_records(self.evidence_collection, where=where, limit=limit)
         return self._normalize_evidence_records(records)
 
-    def get_url_evidence(self, url: str, limit: int = 3) -> list[dict[str, str]]:
+    def get_url_evidence(self, url: str, limit: int = 3) -> list[dict[str, Any]]:
         """Return cached evidence docs for a specific URL without vector ranking."""
 
         where = {"url": url}
         records = self._get_records(self.evidence_collection, where=where, limit=limit)
         return self._normalize_evidence_records(records)
 
-    def save_query_plan(self, phase: str, step: str, queries: list[str]) -> None:
+    def save_query_plan(self, phase: str, step: str, step_signature: str, queries: list[str]) -> None:
         """Persist a step-level query plan for later reuse."""
 
         saved_at = time.time()
         document = json.dumps({"queries": queries}, ensure_ascii=False)
-        record_id = sha1_hash(f"query_plan|{phase}|{step}|{document}")
+        record_id = sha1_hash(f"query_plan|{phase}|{step}|{step_signature}|{document}")
         self.query_plan_collection.upsert(
             ids=[record_id],
             documents=[document],
-            metadatas=[{"phase": phase, "step": step, "saved_at": saved_at}],
+            metadatas=[{"phase": phase, "step": step, "activities_signature": step_signature, "saved_at": saved_at}],
         )
 
-    def get_query_plan(self, phase: str, step: str) -> list[str]:
+    def get_query_plan(self, phase: str, step: str, step_signature: str = "") -> list[str]:
         """Return the most recent cached query plan for a pipeline step."""
 
-        where = self._build_where([{"phase": phase}, {"step": step}])
+        filters = [{"phase": phase}, {"step": step}]
+        if step_signature:
+            filters.append({"activities_signature": step_signature})
+        where = self._build_where(filters)
         records = self._get_records(self.query_plan_collection, where=where, limit=5)
         for record in records:
             try:
@@ -149,30 +171,71 @@ class EvidenceStore:
                 continue
         return []
 
-    def save_candidates(self, phase: str, step: str, candidates: list[Candidate]) -> None:
+    def save_candidates(self, phase: str, step: str, step_signature: str, candidates: list[Candidate]) -> None:
         """Persist extracted candidate lists for a pipeline step."""
 
         saved_at = time.time()
         document = json.dumps([candidate.model_dump() for candidate in candidates], ensure_ascii=False)
-        record_id = sha1_hash(f"candidates|{phase}|{step}|{document}")
+        record_id = sha1_hash(f"candidates|{phase}|{step}|{step_signature}|{document}")
         self.candidate_collection.upsert(
             ids=[record_id],
             documents=[document],
-            metadatas=[{"phase": phase, "step": step, "candidate_count": len(candidates), "saved_at": saved_at}],
+            metadatas=[
+                {
+                    "phase": phase,
+                    "step": step,
+                    "activities_signature": step_signature,
+                    "candidate_count": len(candidates),
+                    "saved_at": saved_at,
+                }
+            ],
         )
 
-    def get_candidates(self, phase: str, step: str) -> list[Candidate]:
-        """Return the most recent cached candidate list for a pipeline step."""
+    def get_candidates(
+        self,
+        phase: str,
+        step: str,
+        step_signature: str = "",
+        allow_signature_mismatch: bool = False,
+    ) -> list[Candidate]:
+        """Return cached candidates for a step, optionally across activity-text signature changes."""
 
-        where = self._build_where([{"phase": phase}, {"step": step}])
-        records = self._get_records(self.candidate_collection, where=where, limit=5)
+        records: list[dict[str, Any]] = []
+        seen_record_ids: set[str] = set()
+
+        if step_signature:
+            exact_where = self._build_where(
+                [{"phase": phase}, {"step": step}, {"activities_signature": step_signature}]
+            )
+            for record in self._get_records(self.candidate_collection, where=exact_where, limit=5):
+                records.append(record)
+                seen_record_ids.add(str(record.get("id", "")))
+
+        if allow_signature_mismatch or not records:
+            step_where = self._build_where([{"phase": phase}, {"step": step}])
+            for record in self._get_records(self.candidate_collection, where=step_where, limit=10):
+                record_id = str(record.get("id", ""))
+                if record_id in seen_record_ids:
+                    continue
+                records.append(record)
+                seen_record_ids.add(record_id)
+
+        candidates: list[Candidate] = []
+        seen_company_keys: set[str] = set()
         for record in records:
             try:
                 payload = json.loads(record["document"])
-                return [Candidate(**item) for item in payload]
+                for item in payload:
+                    candidate = Candidate(**item)
+                    key = canonical_name(candidate.name)
+                    if key in seen_company_keys:
+                        continue
+                    seen_company_keys.add(key)
+                    candidates.append(candidate)
             except Exception:
                 continue
-        return []
+
+        return candidates
 
     def save_company_profile(self, profile: CompanyProfile) -> None:
         """Persist a normalized company profile for later reuse."""
@@ -213,6 +276,7 @@ class EvidenceStore:
         self,
         phase: str,
         step: str,
+        step_signature: str,
         company_name: str,
         candidate_rationale: str,
         verdict: VerificationResult,
@@ -224,13 +288,14 @@ class EvidenceStore:
             {
                 "phase": phase,
                 "step": step,
+                "activities_signature": step_signature,
                 "company_name": company_name,
                 "candidate_rationale": candidate_rationale,
                 "verdict": verdict.model_dump(),
             },
             ensure_ascii=False,
         )
-        record_id = sha1_hash(f"verification|{phase}|{step}|{company_name}|{document}")
+        record_id = sha1_hash(f"verification|{phase}|{step}|{step_signature}|{company_name}|{document}")
         self.verification_collection.upsert(
             ids=[record_id],
             documents=[document],
@@ -238,6 +303,7 @@ class EvidenceStore:
                 {
                     "phase": phase,
                     "step": step,
+                    "activities_signature": step_signature,
                     "company_key": canonical_name(company_name),
                     "company_name": company_name,
                     "include": verdict.include,
@@ -251,14 +317,16 @@ class EvidenceStore:
         self,
         phase: str,
         step: str,
+        step_signature: str,
         company_name: str,
         min_confidence: float = 0.0,
     ) -> VerificationResult | None:
         """Return a cached verification decision for a company and step when confidence is high enough."""
 
-        where = self._build_where(
-            [{"phase": phase}, {"step": step}, {"company_key": canonical_name(company_name)}]
-        )
+        filters = [{"phase": phase}, {"step": step}, {"company_key": canonical_name(company_name)}]
+        if step_signature:
+            filters.append({"activities_signature": step_signature})
+        where = self._build_where(filters)
         records = self._get_records(self.verification_collection, where=where, limit=10)
         for record in records:
             try:
@@ -310,22 +378,27 @@ class EvidenceStore:
             return valid_filters[0]
         return {"$and": valid_filters}
 
-    def _normalize_evidence_records(self, records: list[dict[str, Any]]) -> list[dict[str, str]]:
+    def _normalize_evidence_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Normalize Chroma evidence rows into the structure expected by the rest of the pipeline."""
 
-        normalized: list[dict[str, str]] = []
+        normalized: list[dict[str, Any]] = []
         for record in records:
             normalized.append(
                 {
                     "text": record.get("document", ""),
                     "phase": record.get("phase", ""),
                     "step": record.get("step", ""),
+                    "activities_signature": record.get("activities_signature", ""),
                     "query": record.get("query", ""),
                     "url": record.get("url", ""),
                     "title": record.get("title", ""),
                     "snippet": record.get("snippet", ""),
                     "company_name": record.get("company_name", ""),
                     "source_type": record.get("source_type", ""),
+                    "extraction_status": record.get("extraction_status", ""),
+                    "blocked_reason": record.get("blocked_reason", ""),
+                    "render_mode": record.get("render_mode", ""),
+                    "quality_score": record.get("quality_score", 0.0),
                 }
             )
         return normalized

@@ -1,6 +1,7 @@
 """Markdown report writer for the competitor-landscape workflow."""
 
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,8 @@ class ReportWriter:
         run_dir.mkdir(parents=True, exist_ok=True)
 
         logos_dir = run_dir / self.config.paths.logos_subdir
-        logos_dir.mkdir(parents=True, exist_ok=True)
+        if self.config.logos.copy_cached_logo_to_report_dir:
+            logos_dir.mkdir(parents=True, exist_ok=True)
 
         return {
             "run_label": run_dir.name,
@@ -67,6 +69,7 @@ class ReportWriter:
         profile_df: pd.DataFrame = results["profile_df"]
         gap_df: pd.DataFrame = results["gap_df"]
         records_df: pd.DataFrame = results["records_df"]
+        run_dir = Path(run_context["run_dir"])
 
         sections = [
             "# Biotech AI Competitor Landscape Report",
@@ -94,7 +97,7 @@ class ReportWriter:
             "",
             "# COMPETITOR COVERAGE MATRIX",
             "",
-            "> Verified pipeline-step coverage with competitor counts and grouped company names.",
+            "> Verified pipeline-step coverage with competitor counts and grouped company/product names.",
             "",
             self._render_matrix_table(matrix_df),
             "",
@@ -105,7 +108,7 @@ class ReportWriter:
                 [
                     "## Logo Gallery",
                     "",
-                    self._render_logo_gallery(profile_df),
+                    self._render_logo_gallery(profile_df, run_dir),
                     "",
                 ]
             )
@@ -116,9 +119,9 @@ class ReportWriter:
                 "",
                 "# COMPANY PROFILES",
                 "",
-                "> Profile cards with compact company facts, official websites, and downloaded logos when available.",
+                "> Profile cards with compact company facts, official websites, product context, downloaded logos when available, and controlled taxonomy assignments.",
                 "",
-                self._render_company_profiles_table(profile_df),
+                self._render_company_profiles_table(profile_df, run_dir),
                 "",
                 "---",
                 "",
@@ -148,16 +151,21 @@ class ReportWriter:
         """Build a compact markdown summary table for the top of the report."""
 
         steps_processed = len(results["run_steps"])
-        verified_links = len(records_df.index) if not records_df.empty else 0
+        if records_df.empty:
+            verified_links = 0
+        else:
+            company_col = "company" if "company" in records_df.columns else records_df.columns[0]
+            verified_links = records_df[["phase", "step", company_col]].drop_duplicates().shape[0]
+
         unique_companies = int(profile_df["company"].nunique()) if not profile_df.empty else 0
         logos_downloaded = int((profile_df["logo_path"].astype(str) != "").sum()) if not profile_df.empty else 0
 
         summary_df = pd.DataFrame(
             [
                 {"Metric": "Pipeline steps processed", "Value": steps_processed},
-                {"Metric": "Verified step-company links", "Value": verified_links},
-                {"Metric": "Unique companies profiled", "Value": unique_companies},
-                {"Metric": "Downloaded logos", "Value": logos_downloaded},
+                {"Metric": "Verified unique step-company links", "Value": verified_links},
+                {"Metric": "Unique companies profiled in report", "Value": unique_companies},
+                {"Metric": "Cached logos referenced", "Value": logos_downloaded},
             ]
         )
         return summary_df.to_markdown(index=False)
@@ -175,20 +183,23 @@ class ReportWriter:
         view = view[["phase", "step", "competitor_count", "competitors"]]
         return view.to_markdown(index=False)
 
-    def _render_company_profiles_table(self, profile_df: pd.DataFrame) -> str:
-        """Render the company profile table with inline logo previews and website links."""
+    def _render_company_profiles_table(self, profile_df: pd.DataFrame, run_dir: Path) -> str:
+        """Render the company profile table with inline logo previews, taxonomy labels, product context, and website links."""
 
         if profile_df.empty:
             return "_No company profiles yet._"
 
         view = profile_df.copy()
-        view["logo"] = view["logo_path"].apply(self._logo_cell)
+        view["logo"] = view["logo_path"].apply(lambda value: self._logo_cell(value, run_dir))
         view["website_link"] = view["website"].apply(self._website_cell)
 
         columns = [
             "logo",
             "company",
+            "products_or_solutions",
             "type",
+            "taxonomy_primary_phase",
+            "taxonomy_primary_subcategory",
             "founded",
             "headquarters",
             "funding",
@@ -198,7 +209,14 @@ class ReportWriter:
             "specialization",
             "agentic_posture",
         ]
-        renamed = view[columns].rename(columns={"website_link": "website"})
+        renamed = view[columns].rename(
+            columns={
+                "website_link": "website",
+                "products_or_solutions": "products/solutions",
+                "taxonomy_primary_phase": "taxonomy_phase",
+                "taxonomy_primary_subcategory": "taxonomy_subcategory",
+            }
+        )
         return renamed.to_markdown(index=False)
 
     def _render_gap_scores_section(self, gap_df: pd.DataFrame) -> str:
@@ -234,7 +252,7 @@ class ReportWriter:
         ]
         return "\n".join(section_parts)
 
-    def _render_logo_gallery(self, profile_df: pd.DataFrame) -> str:
+    def _render_logo_gallery(self, profile_df: pd.DataFrame, run_dir: Path) -> str:
         """Render a compact logo gallery table for the main report."""
 
         if profile_df.empty:
@@ -246,7 +264,7 @@ class ReportWriter:
                 continue
             gallery_rows.append(
                 {
-                    "logo": self._logo_cell(row.logo_path),
+                    "logo": self._logo_cell(row.logo_path, run_dir),
                     "company": row.company,
                 }
             )
@@ -257,18 +275,26 @@ class ReportWriter:
         gallery_df = pd.DataFrame(gallery_rows)
         return gallery_df.to_markdown(index=False)
 
-    def _logo_cell(self, logo_path: str) -> str:
+    def _logo_cell(self, logo_path: str, run_dir: Path) -> str:
         """Render an HTML image cell for a logo file relative to the report directory."""
 
-        if not logo_path:
+        if not logo_path or str(logo_path).strip().lower() == "unknown":
             return ""
-        relative_path = f"{self.config.paths.logos_subdir}/{Path(logo_path).name}"
-        return f'<img src="{relative_path}" alt="logo" width="42" />'
+
+        path = Path(str(logo_path))
+        try:
+            resolved_path = path if path.is_absolute() else (Path.cwd() / path)
+            relative_path = os.path.relpath(resolved_path, start=run_dir.resolve())
+            display_path = relative_path.replace(os.sep, "/")
+        except Exception:
+            display_path = str(logo_path).replace(os.sep, "/")
+
+        return f'<img src="{display_path}" alt="logo" width="42" />'
 
     def _website_cell(self, website: str) -> str:
         """Render a markdown hyperlink for a company website."""
 
-        if not website:
+        if not website or str(website).strip().lower() == "unknown":
             return ""
         return f"[{website}]({website})"
 

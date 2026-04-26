@@ -1,8 +1,9 @@
 """Agent that converts user-supplied companies into structured research requests."""
 
 from lib.config import AppConfig
+from lib.discovery.query_factory import build_step_search_terms
 from lib.models import Candidate, CompanyResearchRequest, PipelineStep, UserSeedCompany
-from lib.utils.text_utils import domain_from_url, unique_preserve_order
+from lib.utils.text_utils import canonical_name, domain_from_url, unique_preserve_order
 
 
 TRACKED_COMPANY_FIELDS = [
@@ -80,6 +81,11 @@ class UserCompanyIntakeAgent:
         classification: str = "",
         phase: str = "",
         step: str = "",
+        activities: str = "",
+        step_terms: list[str] | None = None,
+        product_or_solution: str = "",
+        candidate_rationale: str = "",
+        candidate_evidence_urls: list[str] | None = None,
     ) -> CompanyResearchRequest:
         """Create a default company research request for a discovered candidate."""
 
@@ -95,6 +101,11 @@ class UserCompanyIntakeAgent:
             website="",
             notes="",
             preferred_domains=preferred_domains,
+            phase=phase,
+            step=step,
+            activities=activities,
+            step_terms=step_terms or [],
+            product_or_solution=product_or_solution,
         )
         query_hints = query_hints[: self.config.get_active_search_profile().queries_per_company]
 
@@ -108,6 +119,9 @@ class UserCompanyIntakeAgent:
             known_fields={},
             preferred_domains=unique_preserve_order(preferred_domains),
             query_hints=unique_preserve_order(query_hints),
+            product_or_solution=product_or_solution,
+            candidate_rationale=candidate_rationale,
+            candidate_evidence_urls=unique_preserve_order(candidate_evidence_urls or []),
         )
 
     def build_step_seed_candidates(
@@ -115,7 +129,7 @@ class UserCompanyIntakeAgent:
         step: PipelineStep,
         seed_requests: list[CompanyResearchRequest],
     ) -> list[Candidate]:
-        """Create seed candidates for a pipeline step using optional phase/step hints from the user."""
+        """Create seed candidates for a pipeline step using explicit hints or optional text overlap."""
 
         candidates: list[Candidate] = []
         for request in seed_requests:
@@ -127,11 +141,35 @@ class UserCompanyIntakeAgent:
                 candidates.append(
                     Candidate(
                         name=request.company_name,
+                        owning_company_name=request.company_name,
+                        product_or_solution=request.product_or_solution,
+                        evidence_role="target_vendor",
                         rationale="User-provided company candidate aligned with the supplied phase/step hint.",
                         vertical_or_horizontal_guess=request.classification or "unclear",
                         confidence=confidence,
                         evidence_urls=[request.website] if request.website else [],
                         source="user_seed",
+                    )
+                )
+                continue
+
+            if (
+                self.config.discovery.include_seed_companies_without_step_hints
+                and not request.phase
+                and not request.step
+                and self._global_seed_text_matches_step(request, step)
+            ):
+                candidates.append(
+                    Candidate(
+                        name=request.company_name,
+                        owning_company_name=request.company_name,
+                        product_or_solution=request.product_or_solution,
+                        evidence_role="target_vendor",
+                        rationale="User-provided global seed candidate with text overlap against derived step terms.",
+                        vertical_or_horizontal_guess=request.classification or "unclear",
+                        confidence=0.55,
+                        evidence_urls=[request.website] if request.website else [],
+                        source="user_seed_global_overlap",
                     )
                 )
 
@@ -144,14 +182,37 @@ class UserCompanyIntakeAgent:
         website: str,
         notes: str,
         preferred_domains: list[str],
+        phase: str = "",
+        step: str = "",
+        activities: str = "",
+        step_terms: list[str] | None = None,
+        product_or_solution: str = "",
     ) -> list[str]:
-        """Construct company-enrichment search queries from user input and configured database domains."""
+        """Construct company-enrichment queries from user input, product context, step terms, and priority domains."""
 
-        queries = [
-            f'"{company_name}" biotech AI company',
+        del activities  # Accepted for future extension without changing call sites.
+
+        queries: list[str] = []
+
+        if product_or_solution:
+            queries.extend(
+                [
+                    f'"{company_name}" "{product_or_solution}"',
+                    f'"{product_or_solution}" "{step}" AI automation',
+                    f'"{product_or_solution}" pharmacovigilance AI agents',
+                    f'"{product_or_solution}" case intake case processing',
+                    f'"{product_or_solution}" official product page',
+                ]
+            )
+
+        queries.extend(
+            [
+            f'"{company_name}" official website',
             f'"{company_name}" product platform biotech AI',
+            f'"{company_name}" life sciences AI software',
             f'"{company_name}" funding employees founded headquarters',
         ]
+        )
 
         if classification:
             queries.append(f'"{company_name}" {classification} biotech AI')
@@ -161,6 +222,25 @@ class UserCompanyIntakeAgent:
 
         if notes:
             queries.append(f'"{company_name}" {notes}')
+
+        if step:
+            queries.extend(
+                [
+                    f'"{company_name}" "{step}" AI automation',
+                    f'"{company_name}" "{step}" software platform',
+                    f'"{company_name}" "{step}" "life sciences"',
+                ]
+            )
+
+        if phase:
+            queries.append(f'"{company_name}" "{phase}" AI platform')
+
+        if self.config.discovery.company_evidence_include_step_terms:
+            for term in (step_terms or [])[:10]:
+                queries.append(f'"{company_name}" "{term}"')
+                queries.append(f'"{company_name}" "{term}" AI automation')
+                if product_or_solution:
+                    queries.append(f'"{product_or_solution}" "{term}"')
 
         field_query_terms = {
             "funding": "funding",
@@ -175,3 +255,26 @@ class UserCompanyIntakeAgent:
                 queries.append(f'site:{domain} "{company_name}" {search_term}')
 
         return unique_preserve_order(queries)
+
+    def _global_seed_text_matches_step(self, request: CompanyResearchRequest, step: PipelineStep) -> bool:
+        """Check whether a generic seed company plausibly overlaps the active step."""
+
+        terms = build_step_search_terms(step, max_terms=self.config.discovery.max_search_terms_per_step)
+        seed_text_parts = [
+            request.company_name,
+            request.classification,
+            request.website,
+            request.notes,
+            request.product_or_solution,
+            " ".join(request.known_fields.values()),
+            " ".join(request.query_hints),
+        ]
+        seed_text = canonical_name(" ".join(seed_text_parts))
+
+        overlap = 0
+        for term in terms:
+            key = canonical_name(term)
+            if len(key) >= 4 and key in seed_text:
+                overlap += 1
+
+        return overlap >= self.config.discovery.global_seed_step_match_min_token_overlap

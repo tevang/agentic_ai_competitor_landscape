@@ -22,15 +22,16 @@ class PathsConfig(StrictConfigModel):
     chroma_collection_name: str
     reports_dir: str = "reports"
     logos_subdir: str = "logos"
+    logo_cache_dir: str = "assets/company_logos"
 
 
 class RuntimeConfig(StrictConfigModel):
     """Top-level runtime controls for the orchestrated analysis."""
 
     max_steps: int = 5
-    max_candidates_per_step: int = 10
+    max_candidates_per_step: int = 60
     verbose: bool = True
-    process_user_seed_companies_first: bool = True
+    process_user_seed_companies_first: bool = False
     match_seed_companies_to_steps: bool = True
     run_label: str | None = None
 
@@ -117,15 +118,76 @@ class SearchProtocolConfig(StrictConfigModel):
     reuse_existing_step_evidence: bool = True
     reuse_existing_company_evidence: bool = True
     reuse_existing_profiles: bool = True
-    reuse_existing_query_plans: bool = True
+    reuse_existing_query_plans: bool = False
     reuse_existing_candidates: bool = True
-    reuse_existing_verifications: bool = True
+    reuse_existing_verifications: bool = False
+    reuse_rosters_across_activity_text_changes: bool = True
     skip_web_if_existing_step_docs_at_least: int = 12
     skip_web_if_existing_company_docs_at_least: int = 10
     skip_llm_if_existing_profile_confidence_at_least: float = 0.75
     skip_llm_if_existing_verification_confidence_at_least: float = 0.75
     prefer_cached_url_text: bool = True
-    allow_web_search_after_cache_hit: bool = False
+    allow_web_search_after_cache_hit: bool = True
+
+
+class DiscoveryConfig(StrictConfigModel):
+    """Generic candidate-discovery controls that are not phase- or step-specific."""
+
+    deterministic_queries_enabled: bool = True
+    max_auto_queries_per_step: int = 18
+    max_total_queries_per_step: int = 28
+    max_search_terms_per_step: int = 24
+    extraction_context_docs_per_batch: int = 8
+    max_extraction_batches: int = 8
+    max_candidates_per_extraction_batch: int = 25
+    include_cached_rosters_as_priors: bool = True
+    include_seed_companies_without_step_hints: bool = False
+    global_seed_step_match_min_token_overlap: int = 2
+    company_evidence_include_step_terms: bool = True
+    priority_domains_as_site_queries: bool = True
+    priority_site_query_limit: int = 8
+    priority_site_results: int = 2
+
+
+class RetrievalGuardConfig(StrictConfigModel):
+    """Configuration for safe extraction-quality checks and optional browser-render fallback."""
+
+    enabled: bool = True
+    min_clean_text_chars: int = 350
+    detect_cookie_banners: bool = True
+    detect_consent_walls: bool = True
+    detect_captcha_pages: bool = True
+    detect_challenge_pages: bool = True
+    detect_javascript_placeholders: bool = True
+    strip_cookie_banner_lines: bool = True
+    safe_fail_on_protected_pages: bool = True
+    allow_browser_render_fallback: bool = True
+    browser_render_timeout_ms: int = 15_000
+    browser_wait_until: str = "domcontentloaded"
+    browser_headless: bool = True
+    browser_user_agent: str = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    )
+
+
+class TaxonomyConfig(StrictConfigModel):
+    """Configuration for controlled taxonomy enforcement."""
+
+    enforce: bool = True
+    include_in_planner_prompt: bool = True
+    include_in_verification_prompt: bool = True
+    canonical_phases: list[str] = Field(
+        default_factory=lambda: [
+            "Discovery",
+            "Preclinical",
+            "Clinical",
+            "Regulatory",
+            "Manufacturing",
+            "Pharmacovigilance",
+            "Commercial/Lifecycle",
+        ]
+    )
 
 
 class RagConfig(StrictConfigModel):
@@ -133,22 +195,22 @@ class RagConfig(StrictConfigModel):
 
     chroma_document_char_limit: int = 4000
     store_query_n_results: int = 8
-    enrichment_rag_results: int = 10
-    verification_rag_results: int = 8
+    enrichment_rag_results: int = 12
+    verification_rag_results: int = 12
     step_context_limit: int = 12
-    step_context_chars_per_item: int = 900
-    enrichment_context_limit: int = 14
-    enrichment_context_chars_per_item: int = 900
-    verification_context_limit: int = 8
-    verification_context_chars_per_item: int = 900
+    step_context_chars_per_item: int = 1100
+    enrichment_context_limit: int = 16
+    enrichment_context_chars_per_item: int = 1000
+    verification_context_limit: int = 12
+    verification_context_chars_per_item: int = 1000
 
 
 class ReactConfig(StrictConfigModel):
     """Configuration for the lightweight ReAct refinement loop."""
 
     enable_refinement_pass: bool = True
-    min_candidates_before_refine: int = 3
-    refinement_query_count: int = 5
+    min_candidates_before_refine: int = 8
+    refinement_query_count: int = 6
 
 
 class DedupeConfig(StrictConfigModel):
@@ -172,12 +234,14 @@ class ReportingConfig(StrictConfigModel):
     fact_analysis_file_name: str = "fact_driven_analysis.md"
     critical_review_file_name: str = "critical_review.md"
     include_logo_gallery: bool = True
+    include_unverified_profiles: bool = False
 
 
 class LogosConfig(StrictConfigModel):
-    """Configuration for downloading company logos into the report directory."""
+    """Configuration for downloading company logos into a reusable cache."""
 
     download_enabled: bool = True
+    copy_cached_logo_to_report_dir: bool = False
     request_timeout_seconds: int = 15
     min_image_bytes: int = 200
     max_image_bytes: int = 5_000_000
@@ -209,6 +273,9 @@ class AppConfig(StrictConfigModel):
     company_data_sources: CompanyDataSourcesConfig
     openai: OpenAIConfig
     search_protocol: SearchProtocolConfig
+    discovery: DiscoveryConfig
+    retrieval_guard: RetrievalGuardConfig
+    taxonomy: TaxonomyConfig
     tavily: TavilyConfig
     rag: RagConfig
     react: ReactConfig
