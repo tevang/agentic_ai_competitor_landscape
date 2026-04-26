@@ -48,22 +48,105 @@ class ReportWriter:
         run_dir = Path(run_context["run_dir"])
         report_paths = {
             "main_report": run_dir / self.config.reporting.report_file_name,
-            "gap_memo": run_dir / self.config.reporting.gap_memo_file_name,
-            "slide_outline": run_dir / self.config.reporting.slide_outline_file_name,
-            "fact_analysis": run_dir / self.config.reporting.fact_analysis_file_name,
-            "critical_review": run_dir / self.config.reporting.critical_review_file_name,
         }
 
+        if self.config.runtime.analysis_mode == "deep_dive":
+            report_paths.update(
+                {
+                    "gap_memo": run_dir / self.config.reporting.gap_memo_file_name,
+                    "slide_outline": run_dir / self.config.reporting.slide_outline_file_name,
+                    "fact_analysis": run_dir / self.config.reporting.fact_analysis_file_name,
+                    "critical_review": run_dir / self.config.reporting.critical_review_file_name,
+                }
+            )
+
         self._write_text(report_paths["main_report"], self._render_main_report(results, run_context))
-        self._write_text(report_paths["gap_memo"], str(results["gap_memo"]))
-        self._write_text(report_paths["slide_outline"], str(results["slide_outline"]))
-        self._write_text(report_paths["fact_analysis"], str(results["fact_analysis"]))
-        self._write_text(report_paths["critical_review"], str(results["critical_review"]))
+
+        if self.config.runtime.analysis_mode == "deep_dive":
+            self._write_text(report_paths["gap_memo"], str(results["gap_memo"]))
+            self._write_text(report_paths["slide_outline"], str(results["slide_outline"]))
+            self._write_text(report_paths["fact_analysis"], str(results["fact_analysis"]))
+            self._write_text(report_paths["critical_review"], str(results["critical_review"]))
 
         return {key: str(path) for key, path in report_paths.items()}
 
     def _render_main_report(self, results: dict[str, Any], run_context: dict[str, Any]) -> str:
-        """Render the full markdown report with attractive sections and logo-aware profile tables."""
+        """Render the full markdown report with mode-aware sections."""
+
+        if self.config.runtime.analysis_mode == "landscape_scan":
+            return self._render_landscape_scan_report(results, run_context)
+
+        return self._render_deep_dive_report(results, run_context)
+
+    def _render_landscape_scan_report(self, results: dict[str, Any], run_context: dict[str, Any]) -> str:
+        """Render a compact first-pass landscape map report."""
+
+        matrix_df: pd.DataFrame = results["matrix_df"]
+        profile_df: pd.DataFrame = results["profile_df"]
+        gap_df: pd.DataFrame = results["gap_df"]
+        records_df: pd.DataFrame = results["records_df"]
+        run_dir = Path(run_context["run_dir"])
+
+        sections = [
+            "# Biotech AI Competitor Landscape Scan",
+            "",
+            f"**Run label:** `{run_context['run_label']}`  ",
+            f"**Generated:** `{run_context['generated_at']}`  ",
+            "**Mode:** `landscape_scan`",
+            "",
+            "## Executive Snapshot",
+            "",
+            self._build_snapshot_table(results, records_df, profile_df),
+            "",
+            "## Scan Summary",
+            "",
+            str(results["fact_analysis"]).strip(),
+            "",
+            "---",
+            "",
+            "# COMPETITOR COVERAGE MATRIX",
+            "",
+            "> First-pass company/product map. Entries are candidates extracted from search evidence, not fully enriched or deeply verified.",
+            "",
+            self._render_matrix_table(matrix_df),
+            "",
+        ]
+
+        if self.config.reporting.include_logo_gallery:
+            sections.extend(
+                [
+                    "## Logo Gallery",
+                    "",
+                    self._render_logo_gallery(profile_df, run_dir),
+                    "",
+                ]
+            )
+
+        sections.extend(
+            [
+                "---",
+                "",
+                "# COMPANY MAP",
+                "",
+                "> Minimal first-pass fields: company, product/solution, website, taxonomy, agentic posture, confidence, and logo when available.",
+                "",
+                self._render_company_profiles_table(profile_df, run_dir),
+                "",
+                "---",
+                "",
+                "# GAP SCORES",
+                "",
+                "> Rough first-pass saturation indicators only; run deep_dive for validated scoring.",
+                "",
+                self._render_gap_scores_section(gap_df),
+                "",
+            ]
+        )
+
+        return "\n".join(sections).strip() + "\n"
+
+    def _render_deep_dive_report(self, results: dict[str, Any], run_context: dict[str, Any]) -> str:
+        """Render the full deep-dive markdown report."""
 
         matrix_df: pd.DataFrame = results["matrix_df"]
         profile_df: pd.DataFrame = results["profile_df"]
@@ -75,7 +158,8 @@ class ReportWriter:
             "# Biotech AI Competitor Landscape Report",
             "",
             f"**Run label:** `{run_context['run_label']}`  ",
-            f"**Generated:** `{run_context['generated_at']}`",
+            f"**Generated:** `{run_context['generated_at']}`  ",
+            "**Mode:** `deep_dive`",
             "",
             "## Executive Snapshot",
             "",
@@ -119,7 +203,7 @@ class ReportWriter:
                 "",
                 "# COMPANY PROFILES",
                 "",
-                "> Profile cards with compact company facts, official websites, product context, downloaded logos when available, and controlled taxonomy assignments.",
+                "> Profile cards with company facts, official websites, product context, downloaded logos when available, and controlled taxonomy assignments.",
                 "",
                 self._render_company_profiles_table(profile_df, run_dir),
                 "",
@@ -152,10 +236,10 @@ class ReportWriter:
 
         steps_processed = len(results["run_steps"])
         if records_df.empty:
-            verified_links = 0
+            included_links = 0
         else:
             company_col = "company" if "company" in records_df.columns else records_df.columns[0]
-            verified_links = records_df[["phase", "step", company_col]].drop_duplicates().shape[0]
+            included_links = records_df[["phase", "step", company_col]].drop_duplicates().shape[0]
 
         unique_companies = int(profile_df["company"].nunique()) if not profile_df.empty else 0
         logos_downloaded = int((profile_df["logo_path"].astype(str) != "").sum()) if not profile_df.empty else 0
@@ -163,7 +247,7 @@ class ReportWriter:
         summary_df = pd.DataFrame(
             [
                 {"Metric": "Pipeline steps processed", "Value": steps_processed},
-                {"Metric": "Verified unique step-company links", "Value": verified_links},
+                {"Metric": "Included unique step-company links", "Value": included_links},
                 {"Metric": "Unique companies profiled in report", "Value": unique_companies},
                 {"Metric": "Cached logos referenced", "Value": logos_downloaded},
             ]
@@ -174,7 +258,7 @@ class ReportWriter:
         """Render the competitor coverage matrix with an added competitor-count column."""
 
         if matrix_df.empty:
-            return "_No verified coverage records yet._"
+            return "_No coverage records yet._"
 
         view = matrix_df.copy()
         view["competitor_count"] = view["competitors"].apply(
@@ -184,7 +268,7 @@ class ReportWriter:
         return view.to_markdown(index=False)
 
     def _render_company_profiles_table(self, profile_df: pd.DataFrame, run_dir: Path) -> str:
-        """Render the company profile table with inline logo previews, taxonomy labels, product context, and website links."""
+        """Render a mode-aware company table with inline logo previews and website links."""
 
         if profile_df.empty:
             return "_No company profiles yet._"
@@ -192,6 +276,27 @@ class ReportWriter:
         view = profile_df.copy()
         view["logo"] = view["logo_path"].apply(lambda value: self._logo_cell(value, run_dir))
         view["website_link"] = view["website"].apply(self._website_cell)
+
+        if self.config.runtime.analysis_mode == "landscape_scan":
+            columns = [
+                "logo",
+                "company",
+                "products_or_solutions",
+                "taxonomy_primary_phase",
+                "taxonomy_primary_subcategory",
+                "website_link",
+                "agentic_posture",
+                "confidence",
+            ]
+            renamed = view[columns].rename(
+                columns={
+                    "products_or_solutions": "products/solutions",
+                    "taxonomy_primary_phase": "taxonomy_phase",
+                    "taxonomy_primary_subcategory": "taxonomy_subcategory",
+                    "website_link": "website",
+                }
+            )
+            return renamed.to_markdown(index=False)
 
         columns = [
             "logo",

@@ -1,7 +1,7 @@
 """Configuration models and YAML loading utilities for the project."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,11 +28,15 @@ class PathsConfig(StrictConfigModel):
 class RuntimeConfig(StrictConfigModel):
     """Top-level runtime controls for the orchestrated analysis."""
 
-    max_steps: int = 5
+    analysis_mode: Literal["landscape_scan", "deep_dive"] = "landscape_scan"
+    max_steps: int = 0
     max_candidates_per_step: int = 60
     verbose: bool = True
+    verbosity: int = 0
     process_user_seed_companies_first: bool = False
     match_seed_companies_to_steps: bool = True
+    deep_dive_phases: list[str] = Field(default_factory=list)
+    deep_dive_subphases: list[str] = Field(default_factory=list)
     run_label: str | None = None
 
 
@@ -115,6 +119,8 @@ class SearchProtocolConfig(StrictConfigModel):
     """Controls cache reuse and the active web-search rigor preset."""
 
     active_rigor: str = "standard"
+    scan_rigor: str = "scan"
+    deep_dive_rigor: str = "deep"
     reuse_existing_step_evidence: bool = True
     reuse_existing_company_evidence: bool = True
     reuse_existing_profiles: bool = True
@@ -134,6 +140,10 @@ class DiscoveryConfig(StrictConfigModel):
     """Generic candidate-discovery controls that are not phase- or step-specific."""
 
     deterministic_queries_enabled: bool = True
+    skip_llm_query_planning_in_landscape_scan: bool = True
+    skip_company_enrichment_in_landscape_scan: bool = True
+    skip_verification_in_landscape_scan: bool = True
+    landscape_scan_agentic_postures: list[str] = Field(default_factory=lambda: ["explicit", "adjacent"])
     max_auto_queries_per_step: int = 18
     max_total_queries_per_step: int = 28
     max_search_terms_per_step: int = 24
@@ -222,8 +232,8 @@ class DedupeConfig(StrictConfigModel):
 class ReportingConfig(StrictConfigModel):
     """Configuration for report previews and markdown output files."""
 
-    matrix_head_rows: int = 20
-    profile_head_rows: int = 20
+    matrix_head_rows: int = 50
+    profile_head_rows: int = 100
     gap_head_rows: int = 12
     slide_gap_head_rows: int = 10
     slide_count: int = 10
@@ -235,6 +245,7 @@ class ReportingConfig(StrictConfigModel):
     critical_review_file_name: str = "critical_review.md"
     include_logo_gallery: bool = True
     include_unverified_profiles: bool = False
+    generate_narratives_in_landscape_scan: bool = False
 
 
 class LogosConfig(StrictConfigModel):
@@ -284,10 +295,19 @@ class AppConfig(StrictConfigModel):
     logos: LogosConfig
     scoring: ScoringConfig
 
+    def get_active_search_profile_name(self) -> str:
+        """Return the active search-rigor preset name for the configured analysis mode."""
+
+        if self.runtime.analysis_mode == "landscape_scan":
+            return self.search_protocol.scan_rigor
+        if self.runtime.analysis_mode == "deep_dive":
+            return self.search_protocol.deep_dive_rigor
+        return self.search_protocol.active_rigor
+
     def get_active_search_profile(self) -> SearchRigorProfileConfig:
         """Return the configured active search-rigor preset."""
 
-        profile_name = self.search_protocol.active_rigor
+        profile_name = self.get_active_search_profile_name()
         if profile_name not in self.tavily.profiles:
             available = ", ".join(sorted(self.tavily.profiles.keys()))
             raise KeyError(f"Unknown search rigor profile '{profile_name}'. Available: {available}")

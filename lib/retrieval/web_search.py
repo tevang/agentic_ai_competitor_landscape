@@ -30,6 +30,9 @@ class WebSearchService:
         self.search_cache: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
         self.fetch_cache: OrderedDict[str, PageFetchResult] = OrderedDict()
         self.browser_renderer = BrowserRenderService(config)
+        self.search_call_count = 0
+        self.fetch_call_count = 0
+        self.estimated_tavily_credits = 0
 
     def search(
         self,
@@ -49,10 +52,35 @@ class WebSearchService:
         cache_key = json.dumps(payload, sort_keys=True)
         cached = self._get_cached_value(self.search_cache, cache_key)
         if cached is not None:
+            if self.config.runtime.verbosity >= 1:
+                print(f"[usage] Tavily cache hit: query={query[:120]!r}")
             return cached
+
+        self.search_call_count += 1
+        estimated_credits = self._estimate_tavily_search_credits(payload)
+        self.estimated_tavily_credits += estimated_credits
+
+        if self.config.runtime.verbosity >= 1:
+            print(
+                "[usage] "
+                f"Tavily search #{self.search_call_count}: "
+                f"depth={payload.get('search_depth', 'basic')}, "
+                f"max_results={payload.get('max_results')}, "
+                f"include_raw_content={payload.get('include_raw_content', False)}, "
+                f"est_credits~{estimated_credits}, "
+                f"session_est_credits~{self.estimated_tavily_credits}, "
+                f"query={query[:160]!r}"
+            )
 
         result = self.client.search(**payload)
         results = result.get("results", [])
+
+        if self.config.runtime.verbosity >= 1:
+            usage = result.get("usage")
+            if usage:
+                print(f"[usage] Tavily reported usage: {usage}")
+            print(f"[usage] Tavily returned results={len(results)}")
+
         self._set_cached_value(self.search_cache, cache_key, results, self.config.tavily.search_cache_size)
         return results
 
@@ -61,7 +89,13 @@ class WebSearchService:
 
         cached = self._get_cached_value(self.fetch_cache, url)
         if cached is not None:
+            if self.config.runtime.verbosity >= 1:
+                print(f"[usage] Page fetch cache hit: {url}")
             return cached
+
+        self.fetch_call_count += 1
+        if self.config.runtime.verbosity >= 1:
+            print(f"[usage] Page fetch #{self.fetch_call_count}: {url}")
 
         try:
             downloaded = trafilatura.fetch_url(url) or ""
@@ -153,6 +187,12 @@ class WebSearchService:
             payload["chunks_per_source"] = profile.chunks_per_source
 
         return {key: value for key, value in payload.items() if value not in (None, [], {})}
+
+    def _estimate_tavily_search_credits(self, payload: dict[str, Any]) -> int:
+        """Return a rough Tavily credit estimate for logging."""
+
+        search_depth = str(payload.get("search_depth", "basic")).lower()
+        return 2 if search_depth == "advanced" else 1
 
     def _get_cached_value(self, cache: OrderedDict[str, Any], key: str) -> Any:
         """Return a cached value and refresh its recency if it exists."""

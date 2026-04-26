@@ -38,6 +38,17 @@ class ResearchAgent:
             ):
                 return cached_docs
 
+        if self.config.runtime.verbosity >= 1:
+            profile = self.config.get_active_search_profile()
+            print(
+                "[research] "
+                f"step={step.phase} -> {step.step}, "
+                f"queries={len(queries)}, "
+                f"max_results={profile.step_search_max_results}, "
+                f"fetch_top_n={profile.step_fetch_text_for_top_n_results}, "
+                f"cached_docs={len(cached_docs)}"
+            )
+
         new_docs = self._collect_evidence(
             phase=step.phase,
             step_name=step.step,
@@ -48,10 +59,21 @@ class ResearchAgent:
             fetch_top_n=self.config.get_active_search_profile().step_fetch_text_for_top_n_results,
             preferred_domains=[],
         )
-        return self._dedupe_docs(cached_docs + new_docs)
+        docs = self._dedupe_docs(cached_docs + new_docs)
+
+        if self.config.runtime.verbosity >= 1:
+            print(f"[research] collected step docs={len(docs)}")
+
+        return docs
 
     def collect_company_evidence(self, request: CompanyResearchRequest) -> list[EvidenceDoc]:
         """Collect evidence used to confirm and enrich a company profile."""
+
+        if (
+            self.config.runtime.analysis_mode == "landscape_scan"
+            and self.config.discovery.skip_company_enrichment_in_landscape_scan
+        ):
+            return []
 
         cached_docs = []
         if self.config.search_protocol.reuse_existing_company_evidence:

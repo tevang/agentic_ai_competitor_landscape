@@ -8,11 +8,15 @@ paths:
   logo_cache_dir: assets/company_logos # Reusable logo cache checked before any new logo download
 
 runtime:
-  max_steps: 5 # Maximum number of pipeline rows to process; set to 0 to process every row in the pipeline CSV
-  max_candidates_per_step: 60 # Maximum discovered company/product candidates to verify per pipeline step after dedupe
-  verbose: true # Whether to output detailed execution logs to the console
-  process_user_seed_companies_first: false # If true, pre-enrich every seed company before discovery; false avoids polluting one-step reports with unrelated global seeds
+  analysis_mode: landscape_scan # landscape_scan = cheap first-pass map; deep_dive = full enrichment/verification/reporting
+  max_steps: 0 # Maximum number of pipeline rows to process; set to 0 to process every row in the filtered pipeline CSV
+  max_candidates_per_step: 60 # Maximum discovered company/product candidates to keep per pipeline step after dedupe
+  verbose: true # Whether to output the current high-level execution logs to the console
+  verbosity: 1 # 0 = current behavior; 1 = extra rough usage logs for Tavily searches, page fetches, and OpenAI calls
+  process_user_seed_companies_first: false # If true, pre-enrich every seed company before discovery; false avoids polluting first-pass reports with unrelated global seeds
   match_seed_companies_to_steps: true # Use explicit phase/step hints from the seed CSV; generic seeds without hints are not blindly injected by default
+  deep_dive_phases: [] # Optional list of phases to keep when analysis_mode is deep_dive; empty means no phase filter
+  deep_dive_subphases: [] # Optional list of subphases/steps to keep when analysis_mode is deep_dive; empty means no subphase filter
   run_label: null # Optional custom run label. Null creates a timestamped report directory
 
 user_inputs:
@@ -20,7 +24,7 @@ user_inputs:
   seed_companies_required: false # Whether the run should fail if the seed-company CSV is missing
 
 company_data_sources:
-  funding: # Sites to prioritize, not restrict to, when confirming total funding
+  funding: # Sites to prioritize, not restrict to, when confirming total funding in deep_dive mode
     - https://www.crunchbase.com/
     - https://craft.co/odoo
     - https://craft.co
@@ -28,12 +32,12 @@ company_data_sources:
     - https://app.dealroom.co
     - https://www.sec.gov/search-filings
     - https://biopharmguy.com
-  funding_rounds: # Sites to prioritize, not restrict to, when confirming number of funding rounds
+  funding_rounds: # Sites to prioritize, not restrict to, when confirming number of funding rounds in deep_dive mode
     - https://www.crunchbase.com/
     - https://wellfound.com
     - https://app.dealroom.co
     - https://www.sec.gov/search-filings
-  employees: # Sites to prioritize, not restrict to, when confirming employee count or employee range
+  employees: # Sites to prioritize, not restrict to, when confirming employee count or employee range in deep_dive mode
     - https://www.crunchbase.com/
     - https://www.linkedin.com/company/
     - https://craft.co
@@ -41,7 +45,7 @@ company_data_sources:
     - https://app.dealroom.co
     - https://www.sec.gov/search-filings
     - https://clutch.co
-  founded: # Sites to prioritize, not restrict to, when confirming founding year
+  founded: # Sites to prioritize, not restrict to, when confirming founding year in deep_dive mode
     - https://www.crunchbase.com/
     - https://craft.co
     - https://app.dealroom.co
@@ -50,7 +54,7 @@ company_data_sources:
     - https://www.sec.gov/search-filings
     - https://www.wikidata.org
     - https://clutch.co
-  headquarters: # Sites to prioritize, not restrict to, when confirming headquarters location
+  headquarters: # Sites to prioritize, not restrict to, when confirming headquarters location in deep_dive mode
     - https://www.crunchbase.com/
     - https://craft.co
     - https://wellfound.com
@@ -62,7 +66,7 @@ company_data_sources:
     - https://www.wikidata.org
     - https://biopharmguy.com
     - https://clutch.co
-  presence: # Sites to prioritize, not restrict to, when confirming office footprint or broader geographical presence
+  presence: # Sites to prioritize, not restrict to, when confirming office footprint or broader geographical presence in deep_dive mode
     - https://www.crunchbase.com/
     - https://craft.co
     - https://wellfound.com
@@ -83,10 +87,12 @@ openai:
   retry_wait_max_seconds: 15 # Maximum wait time between retries in seconds
 
 search_protocol:
-  active_rigor: deep # Search preset to use: light, standard, or deep
+  active_rigor: standard # Fallback search preset if a mode-specific preset is not available. Options: light, standard, or deep
+  scan_rigor: scan # Search preset automatically used in landscape_scan mode
+  deep_dive_rigor: deep # Search preset automatically used in deep_dive mode
   reuse_existing_step_evidence: true # Reuse previously stored step-level evidence before launching Tavily searches
-  reuse_existing_company_evidence: true # Reuse previously stored company-level evidence before launching Tavily searches
-  reuse_existing_profiles: true # Reuse previously stored company profiles before asking the LLM again
+  reuse_existing_company_evidence: true # Reuse previously stored company-level evidence before launching Tavily searches in deep_dive mode
+  reuse_existing_profiles: true # Reuse previously stored company profiles before asking the LLM again in deep_dive mode
   reuse_existing_query_plans: false # Regenerate query plans when testing changed discovery logic
   reuse_existing_candidates: true # Reuse cached extracted candidates as priors, not as final candidate lists
   reuse_existing_verifications: false # Disable stale verification reuse during reruns after taxonomy/discovery changes
@@ -100,7 +106,13 @@ search_protocol:
 
 discovery:
   deterministic_queries_enabled: true # Add generic non-LLM search templates derived from the pipeline row and taxonomy labels
-  max_auto_queries_per_step: 18 # Maximum deterministic discovery queries added per step; raised to cover more sub-step terms such as case intake, coding, signals, gateways
+  skip_llm_query_planning_in_landscape_scan: true # In landscape_scan mode, use deterministic queries only to save OpenAI tokens
+  skip_company_enrichment_in_landscape_scan: true # In landscape_scan mode, do not run company enrichment searches/LLM calls
+  skip_verification_in_landscape_scan: true # In landscape_scan mode, do not run per-company verification LLM calls
+  landscape_scan_agentic_postures: # Candidate posture labels allowed into the first-pass map
+    - explicit
+    - adjacent
+  max_auto_queries_per_step: 18 # Maximum deterministic discovery queries added per step
   max_total_queries_per_step: 28 # Maximum total LLM + deterministic queries executed per step
   max_search_terms_per_step: 24 # Maximum derived workflow terms used for discovery query generation
   extraction_context_docs_per_batch: 8 # Evidence documents per candidate-extraction prompt batch
@@ -131,7 +143,7 @@ retrieval_guard:
   browser_user_agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36 # User-Agent string used by the optional browser-render fallback
 
 taxonomy:
-  enforce: true # Force verified company-step links into the controlled domain taxonomy before analysis
+  enforce: true # Force verified or scan-included company-step links into the controlled domain taxonomy before analysis
   include_in_planner_prompt: true # Show the canonical taxonomy target in planner prompts
   include_in_verification_prompt: true # Show the canonical taxonomy target in verification prompts
   canonical_phases: # Controlled top-level lifecycle buckets
@@ -154,7 +166,7 @@ tavily:
   include_images: false # Whether to include image URLs in search responses
   include_image_descriptions: false # Whether to include descriptions for returned images
   include_favicon: false # Whether to include favicons for search results
-  include_usage: false # Whether to include Tavily API usage statistics
+  include_usage: false # Whether to include Tavily API usage statistics when available
   include_domains: [] # Global hard include-domain filter; leave empty for broad web discovery
   exclude_domains: [] # List of domains to block from search results
   country: null # Restrict search results to a specific country code
@@ -167,39 +179,50 @@ tavily:
   search_cache_size: 512 # Number of Tavily search responses to cache in memory
   fetch_cache_size: 1024 # Number of fetched page contents or rendered results to cache in memory
   profiles:
-    light: # Fastest and cheapest preset; good for an exploratory pass
-      search_depth: basic # Search depth preset for Tavily
-      chunks_per_source: 1 # Relevant only for advanced search depth
-      default_max_results: 3 # Default maximum number of results per query
-      step_search_max_results: 3 # Max results for step-level queries
-      company_search_max_results: 4 # Max results for company-level queries
-      queries_per_step: 3 # Number of LLM-generated search queries per pipeline step
-      queries_per_company: 5 # Number of search queries executed for a company enrichment pass
-      step_fetch_text_for_top_n_results: 1 # Number of top step-level results to fetch full text for
-      company_fetch_text_for_top_n_results: 2 # Number of top company-level results to fetch full text for
-      page_text_char_limit: 1200 # Maximum characters to extract from a single web page
-    standard: # Balanced preset for most production runs
-      search_depth: advanced # Search depth preset for Tavily
-      chunks_per_source: 2 # Relevant only for advanced search depth
-      default_max_results: 5 # Default maximum number of results per query
-      step_search_max_results: 6 # Max results for step-level queries
-      company_search_max_results: 7 # Max results for company-level queries
-      queries_per_step: 5 # Number of LLM-generated search queries per pipeline step
-      queries_per_company: 8 # Number of search queries executed for a company enrichment pass
-      step_fetch_text_for_top_n_results: 3 # Number of top step-level results to fetch full text for
-      company_fetch_text_for_top_n_results: 4 # Number of top company-level results to fetch full text for
-      page_text_char_limit: 2500 # Maximum characters to extract from a single web page
-    deep: # Highest rigor preset; use when you want breadth and more evidence density
-      search_depth: advanced # Search depth preset for Tavily
-      chunks_per_source: 3 # Relevant only for advanced search depth
-      default_max_results: 8 # Default maximum number of results per query
-      step_search_max_results: 8 # Max results for step-level queries
-      company_search_max_results: 10 # Max results for company-level queries
-      queries_per_step: 6 # Number of LLM-generated search queries per pipeline step
-      queries_per_company: 10 # Number of search queries executed for a company enrichment pass
-      step_fetch_text_for_top_n_results: 5 # Number of top step-level results to fetch full text for
-      company_fetch_text_for_top_n_results: 6 # Number of top company-level results to fetch full text for
-      page_text_char_limit: 4000 # Maximum characters to extract from a single web page
+    scan: # Lowest-credit first-pass landscape map; uses snippets and avoids full-page fetching
+      search_depth: basic # Basic search avoids the extra cost of advanced depth
+      chunks_per_source: null # Not used for basic search
+      default_max_results: 4 # Default maximum number of results per query
+      step_search_max_results: 4 # Max results for step-level discovery queries
+      company_search_max_results: 1 # Not normally used in landscape_scan mode
+      queries_per_step: 0 # LLM query planning is skipped in landscape_scan mode
+      queries_per_company: 0 # Company enrichment is skipped in landscape_scan mode
+      step_fetch_text_for_top_n_results: 0 # Do not fetch full page text in first-pass mapping
+      company_fetch_text_for_top_n_results: 0 # Do not fetch company pages in first-pass mapping
+      page_text_char_limit: 800 # Safety limit if any cached text is reused
+    light: # Fast and cheap preset for exploratory deep_dive runs
+      search_depth: basic
+      chunks_per_source: 1
+      default_max_results: 3
+      step_search_max_results: 3
+      company_search_max_results: 4
+      queries_per_step: 3
+      queries_per_company: 5
+      step_fetch_text_for_top_n_results: 1
+      company_fetch_text_for_top_n_results: 2
+      page_text_char_limit: 1200
+    standard: # Balanced preset for most production deep_dive runs
+      search_depth: advanced
+      chunks_per_source: 2
+      default_max_results: 5
+      step_search_max_results: 6
+      company_search_max_results: 7
+      queries_per_step: 5
+      queries_per_company: 8
+      step_fetch_text_for_top_n_results: 3
+      company_fetch_text_for_top_n_results: 4
+      page_text_char_limit: 2500
+    deep: # Highest rigor preset; use after choosing specific subphases of interest
+      search_depth: advanced
+      chunks_per_source: 3
+      default_max_results: 8
+      step_search_max_results: 8
+      company_search_max_results: 10
+      queries_per_step: 6
+      queries_per_company: 10
+      step_fetch_text_for_top_n_results: 5
+      company_fetch_text_for_top_n_results: 6
+      page_text_char_limit: 4000
 
 rag:
   chroma_document_char_limit: 4000 # Maximum characters allowed for a single document chunk in Chroma
@@ -222,19 +245,20 @@ dedupe:
   fuzzy_threshold: 94 # Similarity threshold (0-100) for fuzzy company name deduplication
 
 reporting:
-  matrix_head_rows: 20 # Number of rows to show in the matrix preview
-  profile_head_rows: 20 # Number of rows to show in the profile preview
+  matrix_head_rows: 50 # Number of rows to show in the matrix preview
+  profile_head_rows: 100 # Number of rows to show in the profile preview
   gap_head_rows: 12 # Number of rows to show in the gap analysis preview
   slide_gap_head_rows: 10 # Number of items to show in the slide-specific gap view
-  slide_count: 10 # Total number of presentation slides to generate
+  slide_count: 10 # Total number of presentation slides to generate in deep_dive mode
   write_markdown_files: true # Whether to write markdown reports to disk
   report_file_name: competitor_landscape_report.md # Main markdown report containing all sections
-  gap_memo_file_name: gap_memo.md # Standalone markdown file for the synthesized memo
-  slide_outline_file_name: presentation_outline.md # Standalone markdown file for the slide outline
-  fact_analysis_file_name: fact_driven_analysis.md # Standalone markdown file for the fact-driven analyst
-  critical_review_file_name: critical_review.md # Standalone markdown file for the critical agent
+  gap_memo_file_name: gap_memo.md # Standalone markdown file for the synthesized memo in deep_dive mode
+  slide_outline_file_name: presentation_outline.md # Standalone markdown file for the slide outline in deep_dive mode
+  fact_analysis_file_name: fact_driven_analysis.md # Standalone markdown file for the fact-driven analyst in deep_dive mode
+  critical_review_file_name: critical_review.md # Standalone markdown file for the critical agent in deep_dive mode
   include_logo_gallery: true # Whether to include a logo gallery in the main markdown report
-  include_unverified_profiles: false # If false, profile tables/logos include only companies verified into the processed steps
+  include_unverified_profiles: false # If false, profile tables/logos include only companies included in processed steps
+  generate_narratives_in_landscape_scan: false # If false, skip analyst/critical/memo/slide LLM calls during landscape_scan mode
 
 logos:
   download_enabled: true # Whether to try downloading a logo for every reportable profiled company
