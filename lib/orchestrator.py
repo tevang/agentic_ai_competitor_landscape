@@ -14,10 +14,11 @@ from lib.agents.user_company_intake_agent import UserCompanyIntakeAgent
 from lib.agents.verification_agent import VerificationAgent
 from lib.analytics.scoring import build_matrix_df, build_profile_df, compute_gap_scores
 from lib.config import AppConfig
+from lib.discovery.query_factory import build_step_search_terms
 from lib.models import Candidate, CompanyProfile, CompanyResearchRequest, PipelineStep, UserSeedCompany
 from lib.utils.logo_downloader import LogoDownloader
 from lib.utils.report_writer import ReportWriter
-from lib.utils.text_utils import canonical_name
+from lib.utils.text_utils import canonical_name, unique_preserve_order
 
 
 class CompetitiveLandscapeOrchestrator:
@@ -89,17 +90,21 @@ class CompetitiveLandscapeOrchestrator:
             )
             all_records.extend(step_records)
 
+        records_df = pd.DataFrame(all_records)
+        report_profile_cache = self._select_report_profile_cache(profile_cache, all_records)
+
         run_context = self.report_writer.prepare_run_directory()
         logo_paths = self.logo_downloader.download_logos(
-            profiles=list(profile_cache.values()),
+            profiles=list(report_profile_cache.values()),
             logos_dir=run_context["logos_dir"],
         )
         for cache_key, logo_path in logo_paths.items():
             if cache_key in profile_cache:
                 profile_cache[cache_key].logo_path = logo_path
+            if cache_key in report_profile_cache:
+                report_profile_cache[cache_key].logo_path = logo_path
 
-        records_df = pd.DataFrame(all_records)
-        profile_df = build_profile_df(profile_cache)
+        profile_df = build_profile_df(report_profile_cache)
         matrix_df = build_matrix_df(records_df)
         gap_df = compute_gap_scores(records_df, run_steps, self.config)
 
@@ -150,6 +155,10 @@ class CompetitiveLandscapeOrchestrator:
             print(f"\n=== Processing: {step.phase} -> {step.step} ===")
 
         step_taxonomy = self.taxonomy_enforcement_agent.map_step(step)
+        step_terms = build_step_search_terms(
+            step,
+            max_terms=self.config.discovery.max_search_terms_per_step,
+        )
 
         queries = self.planner_agent.build_query_plan(step)
         docs = self.research_agent.collect_step_evidence(step, queries)
@@ -163,23 +172,41 @@ class CompetitiveLandscapeOrchestrator:
 
         records: list[dict[str, object]] = []
         for candidate in candidates[: self.config.runtime.max_candidates_per_step]:
-            cache_key = canonical_name(candidate.name)
+            if (candidate.evidence_role or "").strip().lower() == "publisher_only":
+                if self.config.runtime.verbose:
+                    print(f"  [skip] publisher-only source, not vendor: {candidate.name}")
+                continue
+
+            candidate_company_name = candidate.owning_company_name or candidate.name
+            cache_key = canonical_name(candidate_company_name)
+
             research_request = seed_request_map.get(cache_key) or self.user_company_intake_agent.build_default_request(
-                company_name=candidate.name,
+                company_name=candidate_company_name,
                 classification=candidate.vertical_or_horizontal_guess,
                 phase=step.phase,
                 step=step.step,
+                activities=step.activities,
+                step_terms=step_terms,
+                product_or_solution=candidate.product_or_solution,
+                candidate_rationale=candidate.rationale,
+                candidate_evidence_urls=candidate.evidence_urls,
             )
 
             if cache_key not in profile_cache:
                 try:
-                    profile_cache[cache_key] = self.enrichment_agent.enrich_company(research_request)
+                    profile = self.enrichment_agent.enrich_company(research_request)
+                    self._store_profile_aliases(profile_cache, cache_key, profile)
                 except Exception as exc:
                     if self.config.runtime.verbose:
-                        print(f"  [warn] enrichment failed for {candidate.name}: {exc}")
+                        print(f"  [warn] enrichment failed for {candidate_company_name}: {exc}")
                     continue
 
             profile = profile_cache[cache_key]
+
+            if candidate.product_or_solution:
+                profile.products_or_solutions = unique_preserve_order(
+                    profile.products_or_solutions + [candidate.product_or_solution]
+                )
 
             try:
                 verdict = self.verification_agent.verify_company_for_step(
@@ -187,6 +214,8 @@ class CompetitiveLandscapeOrchestrator:
                     profile=profile,
                     candidate_rationale=candidate.rationale,
                     taxonomy_assignment=step_taxonomy,
+                    candidate_evidence_urls=candidate.evidence_urls,
+                    candidate_product_or_solution=candidate.product_or_solution,
                 )
             except Exception as exc:
                 if self.config.runtime.verbose:
@@ -195,13 +224,18 @@ class CompetitiveLandscapeOrchestrator:
 
             if verdict.include:
                 profile = self.taxonomy_enforcement_agent.apply_step_taxonomy(profile, step_taxonomy)
-                profile_cache[cache_key] = profile
+                self._store_profile_aliases(profile_cache, cache_key, profile)
+
+                product_or_solution = candidate.product_or_solution or self._first_product(profile)
+                competitor_label = self._competitor_label(profile.name, product_or_solution)
 
                 records.append(
                     {
                         "phase": step.phase,
                         "step": step.step,
                         "company": profile.name,
+                        "competitor_label": competitor_label,
+                        "product_or_solution": product_or_solution,
                         "vertical_or_horizontal": profile.vertical_or_horizontal,
                         "funding": profile.funding,
                         "funding_rounds": profile.funding_rounds,
@@ -239,9 +273,88 @@ class CompetitiveLandscapeOrchestrator:
             try:
                 if self.config.runtime.verbose:
                     print(f"\n=== Preloading seed company: {request.company_name} ===")
-                profile_cache[cache_key] = self.enrichment_agent.enrich_company(request)
+                profile = self.enrichment_agent.enrich_company(request)
+                self._store_profile_aliases(profile_cache, cache_key, profile)
             except Exception as exc:
                 if self.config.runtime.verbose:
                     print(f"  [warn] seed-company enrichment failed for {request.company_name}: {exc}")
 
         return profile_cache
+
+    def _select_report_profile_cache(
+        self,
+        profile_cache: dict[str, CompanyProfile],
+        records: list[dict[str, object]],
+    ) -> dict[str, CompanyProfile]:
+        """Return profiles that should appear in the report, deduped by enriched company name."""
+
+        deduped_all = self._dedupe_profiles_by_name(profile_cache)
+
+        if self.config.reporting.include_unverified_profiles:
+            return deduped_all
+
+        verified_keys = {
+            canonical_name(str(record.get("company", "")))
+            for record in records
+            if record.get("company")
+        }
+
+        selected: dict[str, CompanyProfile] = {}
+        for profile_key, profile in deduped_all.items():
+            if profile_key in verified_keys:
+                selected[profile_key] = profile
+
+        return selected
+
+    def _store_profile_aliases(
+        self,
+        profile_cache: dict[str, CompanyProfile],
+        candidate_key: str,
+        profile: CompanyProfile,
+    ) -> None:
+        """Store a profile under both the candidate key and enriched company-name key."""
+
+        profile_key = canonical_name(profile.name)
+        profile_cache[candidate_key] = profile
+        profile_cache[profile_key] = profile
+
+    def _dedupe_profiles_by_name(
+        self,
+        profile_cache: dict[str, CompanyProfile],
+    ) -> dict[str, CompanyProfile]:
+        """Deduplicate alias-keyed profile cache by enriched company name."""
+
+        deduped: dict[str, CompanyProfile] = {}
+        for profile in profile_cache.values():
+            profile_key = canonical_name(profile.name)
+            if profile_key not in deduped:
+                deduped[profile_key] = profile
+                continue
+
+            existing = deduped[profile_key]
+            existing.products_or_solutions = unique_preserve_order(
+                existing.products_or_solutions + profile.products_or_solutions
+            )
+            existing.evidence_urls = unique_preserve_order(existing.evidence_urls + profile.evidence_urls)
+            if profile.confidence > existing.confidence:
+                deduped[profile_key] = profile
+
+        return deduped
+
+    def _first_product(self, profile: CompanyProfile) -> str:
+        """Return the first known product/solution for a profile."""
+
+        return profile.products_or_solutions[0] if profile.products_or_solutions else ""
+
+    def _competitor_label(self, company_name: str, product_or_solution: str) -> str:
+        """Build a display label that preserves product context without losing company ownership."""
+
+        if not product_or_solution:
+            return company_name
+
+        normalized_company = canonical_name(company_name)
+        normalized_product = canonical_name(product_or_solution)
+        if normalized_company and normalized_company in normalized_product:
+            return product_or_solution
+
+        return f"{company_name} ({product_or_solution})"

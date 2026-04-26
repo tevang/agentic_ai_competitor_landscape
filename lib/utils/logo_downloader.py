@@ -1,7 +1,8 @@
-"""Website logo downloader used to populate report asset folders."""
+"""Website logo downloader used to populate a reusable logo cache."""
 
 import mimetypes
 import re
+import shutil
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
@@ -22,41 +23,57 @@ class LogoDownloader:
         self.config = config
 
     def download_logos(self, profiles: list[CompanyProfile], logos_dir: str | Path) -> dict[str, str]:
-        """Download logos for all available company profiles and return a cache-key-to-path map."""
+        """Download logos into the global cache and optionally copy them into the report directory."""
 
         if not self.config.logos.download_enabled:
             return {}
 
-        logo_dir = Path(logos_dir)
-        logo_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir = Path(self.config.paths.logo_cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        report_logo_dir = Path(logos_dir)
+        if self.config.logos.copy_cached_logo_to_report_dir:
+            report_logo_dir.mkdir(parents=True, exist_ok=True)
 
         results: dict[str, str] = {}
         for profile in profiles:
-            logo_path = self.download_logo_for_profile(profile, logo_dir)
-            if logo_path is not None:
-                results[canonical_name(profile.name)] = str(logo_path)
+            cached_logo_path = self.download_logo_for_profile(profile, cache_dir)
+            if cached_logo_path is None:
+                continue
+
+            output_path = cached_logo_path
+            if self.config.logos.copy_cached_logo_to_report_dir:
+                output_path = report_logo_dir / cached_logo_path.name
+                if cached_logo_path.resolve() != output_path.resolve():
+                    shutil.copyfile(cached_logo_path, output_path)
+
+            results[canonical_name(profile.name)] = str(output_path)
 
         return results
 
-    def download_logo_for_profile(self, profile: CompanyProfile, logos_dir: Path) -> Path | None:
+    def download_logo_for_profile(self, profile: CompanyProfile, logo_cache_dir: Path) -> Path | None:
         """Download a single company logo using website metadata and sensible fallbacks."""
 
+        logo_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        cached = self._find_existing_logo(profile.name, logo_cache_dir)
+        if cached is not None:
+            return cached
+
         if profile.logo_path and Path(profile.logo_path).exists():
-            return Path(profile.logo_path)
+            existing_path = Path(profile.logo_path)
+            if existing_path.parent.resolve() == logo_cache_dir.resolve():
+                return existing_path
 
         website = self._normalize_website(profile.website)
         if not website:
             return None
 
-        existing = self._find_existing_logo(profile.name, logos_dir)
-        if existing is not None:
-            return existing
-
         html = self._fetch_text(website)
         candidates = self._extract_logo_candidates(website, html)
 
         for candidate in candidates:
-            saved_path = self._download_image(candidate, profile.name, logos_dir)
+            saved_path = self._download_image(candidate, profile.name, logo_cache_dir)
             if saved_path is not None:
                 return saved_path
 
@@ -65,7 +82,7 @@ class LogoDownloader:
     def _normalize_website(self, website: str) -> str:
         """Normalize a company website into an absolute URL."""
 
-        if not website:
+        if not website or website.strip().lower() == "unknown":
             return ""
         return website if "://" in website else f"https://{website}"
 

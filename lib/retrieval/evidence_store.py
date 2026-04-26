@@ -191,21 +191,51 @@ class EvidenceStore:
             ],
         )
 
-    def get_candidates(self, phase: str, step: str, step_signature: str = "") -> list[Candidate]:
-        """Return the most recent cached candidate list for a pipeline step."""
+    def get_candidates(
+        self,
+        phase: str,
+        step: str,
+        step_signature: str = "",
+        allow_signature_mismatch: bool = False,
+    ) -> list[Candidate]:
+        """Return cached candidates for a step, optionally across activity-text signature changes."""
 
-        filters = [{"phase": phase}, {"step": step}]
+        records: list[dict[str, Any]] = []
+        seen_record_ids: set[str] = set()
+
         if step_signature:
-            filters.append({"activities_signature": step_signature})
-        where = self._build_where(filters)
-        records = self._get_records(self.candidate_collection, where=where, limit=5)
+            exact_where = self._build_where(
+                [{"phase": phase}, {"step": step}, {"activities_signature": step_signature}]
+            )
+            for record in self._get_records(self.candidate_collection, where=exact_where, limit=5):
+                records.append(record)
+                seen_record_ids.add(str(record.get("id", "")))
+
+        if allow_signature_mismatch or not records:
+            step_where = self._build_where([{"phase": phase}, {"step": step}])
+            for record in self._get_records(self.candidate_collection, where=step_where, limit=10):
+                record_id = str(record.get("id", ""))
+                if record_id in seen_record_ids:
+                    continue
+                records.append(record)
+                seen_record_ids.add(record_id)
+
+        candidates: list[Candidate] = []
+        seen_company_keys: set[str] = set()
         for record in records:
             try:
                 payload = json.loads(record["document"])
-                return [Candidate(**item) for item in payload]
+                for item in payload:
+                    candidate = Candidate(**item)
+                    key = canonical_name(candidate.name)
+                    if key in seen_company_keys:
+                        continue
+                    seen_company_keys.add(key)
+                    candidates.append(candidate)
             except Exception:
                 continue
-        return []
+
+        return candidates
 
     def save_company_profile(self, profile: CompanyProfile) -> None:
         """Persist a normalized company profile for later reuse."""

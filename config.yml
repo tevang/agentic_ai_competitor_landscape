@@ -1,17 +1,18 @@
 paths:
-  pipeline_csv: data/subests/one_most_expensive.csv # Path to the CSV containing drug development pipeline stages
+  pipeline_csv: data/subests/one_most_expensive.csv # Path to the CSV containing drug development pipeline stages; can be a one-row subset or the full ontology
   seed_companies_csv: data/input/user_seed_companies.csv # Optional CSV of user-provided companies to confirm and enrich
   chroma_path: .chroma_drug_pipeline # Local directory for ChromaDB persistence
   chroma_collection_name: drug_pipeline_competitor # Prefix used for the Chroma collections
-  reports_dir: reports # Base directory for markdown reports and downloaded assets
-  logos_subdir: logos # Subdirectory inside each report run for downloaded company logos
+  reports_dir: reports # Base directory for markdown reports
+  logos_subdir: logos # Optional per-report logo subdirectory when copying cached logos into a report folder
+  logo_cache_dir: assets/company_logos # Reusable logo cache checked before any new logo download
 
 runtime:
-  max_steps: 5 # Maximum number of research iterations to perform
-  max_candidates_per_step: 10 # Maximum company candidates to extract in a single step
+  max_steps: 5 # Maximum number of pipeline rows to process; set to 0 to process every row in the pipeline CSV
+  max_candidates_per_step: 60 # Maximum discovered company/product candidates to verify per pipeline step after dedupe
   verbose: true # Whether to output detailed execution logs to the console
-  process_user_seed_companies_first: true # Confirm and enrich user-provided companies before normal discovery
-  match_seed_companies_to_steps: true # Use phase/step hints from the seed CSV to inject seed companies into matching steps
+  process_user_seed_companies_first: false # If true, pre-enrich every seed company before discovery; false avoids polluting one-step reports with unrelated global seeds
+  match_seed_companies_to_steps: true # Use explicit phase/step hints from the seed CSV; generic seeds without hints are not blindly injected by default
   run_label: null # Optional custom run label. Null creates a timestamped report directory
 
 user_inputs:
@@ -19,7 +20,7 @@ user_inputs:
   seed_companies_required: false # Whether the run should fail if the seed-company CSV is missing
 
 company_data_sources:
-  funding: # Sites to prioritize when confirming total funding
+  funding: # Sites to prioritize, not restrict to, when confirming total funding
     - https://www.crunchbase.com/
     - https://craft.co/odoo
     - https://craft.co
@@ -27,12 +28,12 @@ company_data_sources:
     - https://app.dealroom.co
     - https://www.sec.gov/search-filings
     - https://biopharmguy.com
-  funding_rounds: # Sites to prioritize when confirming number of funding rounds
+  funding_rounds: # Sites to prioritize, not restrict to, when confirming number of funding rounds
     - https://www.crunchbase.com/
     - https://wellfound.com
     - https://app.dealroom.co
     - https://www.sec.gov/search-filings
-  employees: # Sites to prioritize when confirming employee count or employee range
+  employees: # Sites to prioritize, not restrict to, when confirming employee count or employee range
     - https://www.crunchbase.com/
     - https://www.linkedin.com/company/
     - https://craft.co
@@ -40,7 +41,7 @@ company_data_sources:
     - https://app.dealroom.co
     - https://www.sec.gov/search-filings
     - https://clutch.co
-  founded: # Sites to prioritize when confirming founding year
+  founded: # Sites to prioritize, not restrict to, when confirming founding year
     - https://www.crunchbase.com/
     - https://craft.co
     - https://app.dealroom.co
@@ -49,7 +50,7 @@ company_data_sources:
     - https://www.sec.gov/search-filings
     - https://www.wikidata.org
     - https://clutch.co
-  headquarters: # Sites to prioritize when confirming headquarters location
+  headquarters: # Sites to prioritize, not restrict to, when confirming headquarters location
     - https://www.crunchbase.com/
     - https://craft.co
     - https://wellfound.com
@@ -61,7 +62,7 @@ company_data_sources:
     - https://www.wikidata.org
     - https://biopharmguy.com
     - https://clutch.co
-  presence: # Sites to prioritize when confirming office footprint or broader geographical presence
+  presence: # Sites to prioritize, not restrict to, when confirming office footprint or broader geographical presence
     - https://www.crunchbase.com/
     - https://craft.co
     - https://wellfound.com
@@ -86,15 +87,32 @@ search_protocol:
   reuse_existing_step_evidence: true # Reuse previously stored step-level evidence before launching Tavily searches
   reuse_existing_company_evidence: true # Reuse previously stored company-level evidence before launching Tavily searches
   reuse_existing_profiles: true # Reuse previously stored company profiles before asking the LLM again
-  reuse_existing_query_plans: true # Reuse cached extracted query plans for the same pipeline step signature
-  reuse_existing_candidates: true # Reuse cached extracted candidates for the same pipeline step signature
-  reuse_existing_verifications: true # Reuse cached step/company verification decisions for the same pipeline step signature
-  skip_web_if_existing_step_docs_at_least: 12 # Skip step-level web search if at least this many cached evidence docs exist
-  skip_web_if_existing_company_docs_at_least: 10 # Skip company-level web search if at least this many cached evidence docs exist
+  reuse_existing_query_plans: false # Regenerate query plans when testing changed discovery logic
+  reuse_existing_candidates: true # Reuse cached extracted candidates as priors, not as final candidate lists
+  reuse_existing_verifications: false # Disable stale verification reuse during reruns after taxonomy/discovery changes
+  reuse_rosters_across_activity_text_changes: true # Allow prior candidate rosters for the same phase/step even when the activity text signature changes
+  skip_web_if_existing_step_docs_at_least: 12 # Minimum cached step docs that can satisfy a run only when allow_web_search_after_cache_hit is false
+  skip_web_if_existing_company_docs_at_least: 10 # Minimum cached company docs that can satisfy a run only when allow_web_search_after_cache_hit is false
   skip_llm_if_existing_profile_confidence_at_least: 0.75 # Reuse a cached company profile if confidence is already high enough
-  skip_llm_if_existing_verification_confidence_at_least: 0.75 # Reuse a cached verification decision if confidence is already high enough
+  skip_llm_if_existing_verification_confidence_at_least: 0.75 # Reuse a cached verification decision if verification reuse is enabled
   prefer_cached_url_text: true # Reuse previously stored page text for a URL before fetching it again
-  allow_web_search_after_cache_hit: false # If false, strong cache hits prevent additional Tavily calls
+  allow_web_search_after_cache_hit: true # If true, cached evidence is merged with fresh search rather than stopping discovery early
+
+discovery:
+  deterministic_queries_enabled: true # Add generic non-LLM search templates derived from the pipeline row and taxonomy labels
+  max_auto_queries_per_step: 18 # Maximum deterministic discovery queries added per step; raised to cover more sub-step terms such as case intake, coding, signals, gateways
+  max_total_queries_per_step: 28 # Maximum total LLM + deterministic queries executed per step
+  max_search_terms_per_step: 24 # Maximum derived workflow terms used for discovery query generation
+  extraction_context_docs_per_batch: 8 # Evidence documents per candidate-extraction prompt batch
+  max_extraction_batches: 8 # Maximum evidence batches passed through candidate extraction
+  max_candidates_per_extraction_batch: 25 # Maximum companies the extractor may return from one evidence batch
+  include_cached_rosters_as_priors: true # Merge cached candidate rosters into new discovery instead of returning them as the final answer
+  include_seed_companies_without_step_hints: false # Do not inject global seed companies into every step unless enabled here
+  global_seed_step_match_min_token_overlap: 2 # If global seed injection is enabled, minimum overlap with derived step terms
+  company_evidence_include_step_terms: true # Add step/workflow-specific terms to company-enrichment searches for discovered candidates
+  priority_domains_as_site_queries: true # Treat company_data_sources as supplemental site: searches, not Tavily include_domains filters
+  priority_site_query_limit: 8 # Maximum priority domains to probe per company evidence pass
+  priority_site_results: 2 # Maximum results for each supplemental priority-domain query
 
 retrieval_guard:
   enabled: true # Enable clean-text quality checks before page text enters the pipeline
@@ -137,7 +155,7 @@ tavily:
   include_image_descriptions: false # Whether to include descriptions for returned images
   include_favicon: false # Whether to include favicons for search results
   include_usage: false # Whether to include Tavily API usage statistics
-  include_domains: [] # List of specific domains to restrict search to
+  include_domains: [] # Global hard include-domain filter; leave empty for broad web discovery
   exclude_domains: [] # List of domains to block from search results
   country: null # Restrict search results to a specific country code
   time_range: null # Time window for news searches
@@ -155,23 +173,21 @@ tavily:
       default_max_results: 3 # Default maximum number of results per query
       step_search_max_results: 3 # Max results for step-level queries
       company_search_max_results: 4 # Max results for company-level queries
-      queries_per_step: 3 # Number of search queries generated per pipeline step
-      queries_per_company: 4 # Number of search queries executed for a company enrichment pass
+      queries_per_step: 3 # Number of LLM-generated search queries per pipeline step
+      queries_per_company: 5 # Number of search queries executed for a company enrichment pass
       step_fetch_text_for_top_n_results: 1 # Number of top step-level results to fetch full text for
       company_fetch_text_for_top_n_results: 2 # Number of top company-level results to fetch full text for
-      # Fetching full page text for only the top-N search results saves time and tokens.
       page_text_char_limit: 1200 # Maximum characters to extract from a single web page
     standard: # Balanced preset for most production runs
       search_depth: advanced # Search depth preset for Tavily
       chunks_per_source: 2 # Relevant only for advanced search depth
       default_max_results: 5 # Default maximum number of results per query
-      step_search_max_results: 5 # Max results for step-level queries
-      company_search_max_results: 6 # Max results for company-level queries
-      queries_per_step: 5 # Number of search queries generated per pipeline step
-      queries_per_company: 6 # Number of search queries executed for a company enrichment pass
+      step_search_max_results: 6 # Max results for step-level queries
+      company_search_max_results: 7 # Max results for company-level queries
+      queries_per_step: 5 # Number of LLM-generated search queries per pipeline step
+      queries_per_company: 8 # Number of search queries executed for a company enrichment pass
       step_fetch_text_for_top_n_results: 3 # Number of top step-level results to fetch full text for
-      company_fetch_text_for_top_n_results: 3 # Number of top company-level results to fetch full text for
-      # Fetching full page text for only the top-N search results saves time and tokens.
+      company_fetch_text_for_top_n_results: 4 # Number of top company-level results to fetch full text for
       page_text_char_limit: 2500 # Maximum characters to extract from a single web page
     deep: # Highest rigor preset; use when you want breadth and more evidence density
       search_depth: advanced # Search depth preset for Tavily
@@ -179,29 +195,28 @@ tavily:
       default_max_results: 8 # Default maximum number of results per query
       step_search_max_results: 8 # Max results for step-level queries
       company_search_max_results: 10 # Max results for company-level queries
-      queries_per_step: 6 # Number of search queries generated per pipeline step
-      queries_per_company: 8 # Number of search queries executed for a company enrichment pass
+      queries_per_step: 6 # Number of LLM-generated search queries per pipeline step
+      queries_per_company: 10 # Number of search queries executed for a company enrichment pass
       step_fetch_text_for_top_n_results: 5 # Number of top step-level results to fetch full text for
       company_fetch_text_for_top_n_results: 6 # Number of top company-level results to fetch full text for
-      # Fetching full page text for only the top-N search results saves time and tokens.
       page_text_char_limit: 4000 # Maximum characters to extract from a single web page
 
 rag:
   chroma_document_char_limit: 4000 # Maximum characters allowed for a single document chunk in Chroma
   store_query_n_results: 8 # Number of results to retrieve for general vector-store similarity queries
-  enrichment_rag_results: 10 # Number of retrieval results for the enrichment agent
-  verification_rag_results: 8 # Number of retrieval results for the verification agent
-  step_context_limit: 12 # Maximum number of context items for step-level prompts
-  step_context_chars_per_item: 900 # Character limit for each context item in step-level prompts
-  enrichment_context_limit: 14 # Maximum number of context items for enrichment prompts
-  enrichment_context_chars_per_item: 900 # Character limit for each context item in enrichment prompts
-  verification_context_limit: 8 # Maximum number of context items for verification prompts
-  verification_context_chars_per_item: 900 # Character limit for each context item in verification prompts
+  enrichment_rag_results: 12 # Number of retrieval results for the enrichment agent
+  verification_rag_results: 12 # Number of retrieval results for the verification agent
+  step_context_limit: 12 # Maximum number of context items for a single step-level extraction batch
+  step_context_chars_per_item: 1100 # Character limit for each context item in step-level prompts
+  enrichment_context_limit: 16 # Maximum number of context items for enrichment prompts
+  enrichment_context_chars_per_item: 1000 # Character limit for each context item in enrichment prompts
+  verification_context_limit: 12 # Maximum number of context items for verification prompts
+  verification_context_chars_per_item: 1000 # Character limit for each context item in verification prompts
 
 react:
   enable_refinement_pass: true # Whether to perform an extra search pass for validation
-  min_candidates_before_refine: 3 # Minimum candidates needed to trigger the refinement loop
-  refinement_query_count: 5 # Number of targeted queries for the refinement pass
+  min_candidates_before_refine: 8 # Minimum candidates needed to avoid the refinement loop
+  refinement_query_count: 6 # Number of targeted queries for the refinement pass
 
 dedupe:
   fuzzy_threshold: 94 # Similarity threshold (0-100) for fuzzy company name deduplication
@@ -219,9 +234,11 @@ reporting:
   fact_analysis_file_name: fact_driven_analysis.md # Standalone markdown file for the fact-driven analyst
   critical_review_file_name: critical_review.md # Standalone markdown file for the critical agent
   include_logo_gallery: true # Whether to include a logo gallery in the main markdown report
+  include_unverified_profiles: false # If false, profile tables/logos include only companies verified into the processed steps
 
 logos:
-  download_enabled: true # Whether to try downloading a logo for every profiled company
+  download_enabled: true # Whether to try downloading a logo for every reportable profiled company
+  copy_cached_logo_to_report_dir: false # If false, markdown references reusable logos from paths.logo_cache_dir instead of duplicating them per report
   request_timeout_seconds: 15 # Timeout for website and image download requests
   min_image_bytes: 200 # Ignore tiny files that are unlikely to be useful logos
   max_image_bytes: 5000000 # Maximum image size to download per logo

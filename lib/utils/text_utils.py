@@ -2,7 +2,7 @@
 
 import hashlib
 import re
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from rapidfuzz import fuzz
@@ -72,12 +72,19 @@ def evidence_to_context(items: list[Any], limit: int, chars_per_item: int) -> st
             title = item.title
             url = item.url
             text = item.text or item.snippet
+            source_type = item.source_type
         else:
             title = item.get("title", "")
             url = item.get("url", "")
             text = item.get("text", "") or item.get("snippet", "")
+            source_type = item.get("source_type", "")
 
-        block = f"TITLE: {title}\nURL: {url}\nTEXT: {clean_text(text)[:chars_per_item]}"
+        block = (
+            f"TITLE: {title}\n"
+            f"URL: {url}\n"
+            f"SOURCE_TYPE: {source_type}\n"
+            f"TEXT: {clean_text(text)[:chars_per_item]}"
+        )
         blocks.append(block)
 
     return "\n\n---\n\n".join(blocks)
@@ -112,8 +119,8 @@ def domain_from_url(url: str) -> str:
     return domain
 
 
-def unique_preserve_order(items: list[str]) -> list[str]:
-    """Deduplicate a list of strings while preserving the original order."""
+def unique_preserve_order(items: Iterable[str]) -> list[str]:
+    """Deduplicate a sequence of strings while preserving the original order."""
 
     seen: set[str] = set()
     output: list[str] = []
@@ -139,4 +146,28 @@ def slugify_filename(text: str) -> str:
     """Convert a free-form string into a filesystem-friendly slug."""
 
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", text.strip().lower()).strip("-")
-    return slug or "file"
+    return slug or "unknown"
+
+
+def chunked(items: list[Any], size: int) -> list[list[Any]]:
+    """Split a list into fixed-size chunks."""
+
+    if size <= 0:
+        return [items]
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def rank_evidence_docs_for_extraction(docs: list[EvidenceDoc]) -> list[EvidenceDoc]:
+    """Rank evidence for extraction while preserving useful search-result snippets."""
+
+    indexed_docs = list(enumerate(docs))
+
+    def score(item: tuple[int, EvidenceDoc]) -> tuple[float, float, int, int]:
+        index, doc = item
+        text = doc.text or doc.snippet or ""
+        has_full_text = 1.0 if doc.text else 0.0
+        quality_score = float(doc.quality_score or 0.0)
+        text_length = min(len(text), 4000)
+        return (has_full_text, quality_score, text_length, -index)
+
+    return [doc for _, doc in sorted(indexed_docs, key=score, reverse=True)]
