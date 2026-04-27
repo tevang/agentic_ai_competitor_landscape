@@ -1,5 +1,7 @@
 """Top-level orchestration logic for the multi-agent competitive-intelligence workflow."""
 
+from pathlib import Path
+
 import pandas as pd
 
 from lib.agents.critical_agent import CriticalAgent
@@ -9,6 +11,7 @@ from lib.agents.fact_driven_analyst_agent import FactDrivenAnalystAgent
 from lib.agents.planner_agent import PlannerAgent
 from lib.agents.presentation_agent import PresentationAgent
 from lib.agents.research_agent import ResearchAgent
+from lib.agents.summary_agent import SummaryAgent
 from lib.agents.taxonomy_enforcement_agent import TaxonomyEnforcementAgent
 from lib.agents.user_company_intake_agent import UserCompanyIntakeAgent
 from lib.agents.verification_agent import VerificationAgent
@@ -37,6 +40,7 @@ class CompetitiveLandscapeOrchestrator:
         user_company_intake_agent: UserCompanyIntakeAgent,
         fact_driven_analyst_agent: FactDrivenAnalystAgent,
         critical_agent: CriticalAgent,
+        summary_agent: SummaryAgent,
         report_writer: ReportWriter,
         logo_downloader: LogoDownloader,
     ) -> None:
@@ -53,6 +57,7 @@ class CompetitiveLandscapeOrchestrator:
         self.user_company_intake_agent = user_company_intake_agent
         self.fact_driven_analyst_agent = fact_driven_analyst_agent
         self.critical_agent = critical_agent
+        self.summary_agent = summary_agent
         self.report_writer = report_writer
         self.logo_downloader = logo_downloader
 
@@ -132,6 +137,20 @@ class CompetitiveLandscapeOrchestrator:
             gap_memo = ""
             slide_outline = ""
 
+        summary_df = pd.DataFrame(columns=self.config.summary.output_columns)
+        summary_csv_path = ""
+        if self.config.summary.enabled:
+            summary_df, summary_csv_path = self.summary_agent.summarize_pipeline_results(
+                matrix_df=matrix_df,
+                profile_df=profile_df,
+                gap_df=gap_df,
+                fact_analysis=fact_analysis,
+                critical_review=critical_review,
+                gap_memo=gap_memo,
+                slide_outline=slide_outline,
+                run_dir=Path(run_context["run_dir"]),
+            )
+
         results: dict[str, object] = {
             "run_steps": run_steps,
             "seed_requests": seed_requests,
@@ -139,13 +158,19 @@ class CompetitiveLandscapeOrchestrator:
             "profile_df": profile_df,
             "matrix_df": matrix_df,
             "gap_df": gap_df,
+            "summary_df": summary_df,
+            "summary_csv_path": summary_csv_path,
             "fact_analysis": fact_analysis,
             "critical_review": critical_review,
             "gap_memo": gap_memo,
             "slide_outline": slide_outline,
             "run_context": run_context,
         }
+
         report_paths = self.report_writer.write_reports(results, run_context)
+        if summary_csv_path:
+            report_paths["summary_csv"] = summary_csv_path
+
         results["report_paths"] = report_paths
         return results
 

@@ -28,7 +28,7 @@ class PathsConfig(StrictConfigModel):
 class RuntimeConfig(StrictConfigModel):
     """Top-level runtime controls for the orchestrated analysis."""
 
-    analysis_mode: Literal["landscape_scan", "deep_dive"] = "landscape_scan"
+    analysis_mode: Literal["landscape_scan", "deep_dive", "summary_only"] = "landscape_scan"
     max_steps: int = 0
     max_candidates_per_step: int = 60
     verbose: bool = True
@@ -248,6 +248,36 @@ class ReportingConfig(StrictConfigModel):
     generate_narratives_in_landscape_scan: bool = False
 
 
+class SummaryConfig(StrictConfigModel):
+    """Configuration for the post-run or standalone CSV summary agent."""
+
+    enabled: bool = True
+    use_llm: bool = True
+    standalone_report_dir: str | None = None
+    output_dir: str | None = None
+    output_file_name: str = "competitor_summary.csv"
+    max_context_chars: int = 90_000
+    max_rows: int = 200
+    include_critical_missing_companies: bool = True
+    output_columns: list[str] = Field(
+        default_factory=lambda: [
+            "company name",
+            "products/solutions",
+            "type",
+            "taxonomy_phase",
+            "taxonomy_subcategory",
+            "founded",
+            "headquarters",
+            "funding",
+            "funding_rounds",
+            "employees",
+            "website",
+            "specialization",
+            "gentic_posture",
+        ]
+    )
+
+
 class LogosConfig(StrictConfigModel):
     """Configuration for downloading company logos into a reusable cache."""
 
@@ -292,6 +322,7 @@ class AppConfig(StrictConfigModel):
     react: ReactConfig
     dedupe: DedupeConfig
     reporting: ReportingConfig
+    summary: SummaryConfig
     logos: LogosConfig
     scoring: ScoringConfig
 

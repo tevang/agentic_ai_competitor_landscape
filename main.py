@@ -1,6 +1,7 @@
 """Entry point for the biotech agentic competitive-intelligence pipeline."""
 
 import argparse
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -11,6 +12,7 @@ from lib.agents.fact_driven_analyst_agent import FactDrivenAnalystAgent
 from lib.agents.planner_agent import PlannerAgent
 from lib.agents.presentation_agent import PresentationAgent
 from lib.agents.research_agent import ResearchAgent
+from lib.agents.summary_agent import SummaryAgent
 from lib.agents.taxonomy_enforcement_agent import TaxonomyEnforcementAgent
 from lib.agents.user_company_intake_agent import UserCompanyIntakeAgent
 from lib.agents.verification_agent import VerificationAgent
@@ -36,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["landscape_scan", "deep_dive"],
+        choices=["landscape_scan", "deep_dive", "summary_only"],
         default=None,
         help="Override runtime.analysis_mode from config.yml.",
     )
@@ -49,6 +51,16 @@ def parse_args() -> argparse.Namespace:
         "--deep-phases",
         default=None,
         help="Comma-separated phase names to keep for deep_dive mode.",
+    )
+    parser.add_argument(
+        "--report-dir",
+        default=None,
+        help="Existing report directory to summarize when mode is summary_only.",
+    )
+    parser.add_argument(
+        "--summary-output",
+        default=None,
+        help="Optional explicit output CSV path for summary_only mode.",
     )
     parser.add_argument(
         "--verbosity",
@@ -74,6 +86,9 @@ def apply_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfi
 
     if args.deep_phases is not None:
         config.runtime.deep_dive_phases = _parse_csv_arg(args.deep_phases)
+
+    if args.report_dir is not None:
+        config.summary.standalone_report_dir = args.report_dir
 
     return config
 
@@ -127,12 +142,53 @@ def _parse_csv_arg(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _build_llm_if_needed(config: AppConfig) -> LLM | None:
+    """Create an LLM client only when the configured execution path needs one."""
+
+    if config.runtime.analysis_mode == "summary_only" and not config.summary.use_llm:
+        return None
+    return LLM(config.openai, verbosity=config.runtime.verbosity)
+
+
+def _run_summary_only(config: AppConfig, args: argparse.Namespace) -> None:
+    """Run only the summary agent on an existing report directory without Tavily/web search."""
+
+    report_dir = config.summary.standalone_report_dir
+    if not report_dir:
+        raise ValueError(
+            "summary_only mode requires summary.standalone_report_dir in config.yml "
+            "or --report-dir on the command line."
+        )
+
+    llm = _build_llm_if_needed(config)
+    summary_agent = SummaryAgent(llm=llm, config=config)
+
+    output_path = Path(args.summary_output) if args.summary_output else None
+    summary_df, summary_csv_path = summary_agent.summarize_existing_report_dir(
+        report_dir=Path(report_dir),
+        output_path=output_path,
+    )
+
+    print(f"Analysis mode: {config.runtime.analysis_mode}")
+    print_dataframe_section(
+        title="SUMMARY CSV PREVIEW",
+        dataframe=summary_df,
+        empty_message="No summary rows created.",
+    )
+    print("\n\n# WRITTEN SUMMARY FILE\n")
+    print(f"- summary_csv: {summary_csv_path}")
+
+
 def main() -> None:
     """Load configuration, initialize services, run the workflow, and print the outputs."""
 
     load_dotenv()
     args = parse_args()
     config = apply_cli_overrides(load_config(args.config), args)
+
+    if config.runtime.analysis_mode == "summary_only":
+        _run_summary_only(config, args)
+        return
 
     all_steps = load_pipeline_csv(config.paths.pipeline_csv)
     steps = filter_steps_for_runtime(all_steps, config)
@@ -165,6 +221,7 @@ def main() -> None:
     fact_driven_analyst_agent = FactDrivenAnalystAgent(llm, config)
     critical_agent = CriticalAgent(llm, config)
     presentation_agent = PresentationAgent(llm, config)
+    summary_agent = SummaryAgent(llm=llm, config=config)
     report_writer = ReportWriter(config)
     logo_downloader = LogoDownloader(config)
 
@@ -180,6 +237,7 @@ def main() -> None:
         user_company_intake_agent=user_company_intake_agent,
         fact_driven_analyst_agent=fact_driven_analyst_agent,
         critical_agent=critical_agent,
+        summary_agent=summary_agent,
         report_writer=report_writer,
         logo_downloader=logo_downloader,
     )
@@ -204,6 +262,14 @@ def main() -> None:
         dataframe=results["gap_df"],
         empty_message="No gaps yet.",
     )
+
+    summary_df = results.get("summary_df")
+    if summary_df is not None:
+        print_dataframe_section(
+            title="SUMMARY CSV PREVIEW",
+            dataframe=summary_df,
+            empty_message="No summary rows created.",
+        )
 
     print_text_section("FACT-DRIVEN ANALYST VIEW", str(results.get("fact_analysis", "")))
     print_text_section("CRITICAL AGENT REVIEW", str(results.get("critical_review", "")))

@@ -8,7 +8,7 @@ paths:
   logo_cache_dir: assets/company_logos # Reusable logo cache checked before any new logo download
 
 runtime:
-  analysis_mode: landscape_scan # landscape_scan = cheap first-pass map; deep_dive = full enrichment/verification/reporting
+  analysis_mode: landscape_scan # landscape_scan = cheap first-pass map; deep_dive = full enrichment/verification/reporting; summary_only = no-web review of an existing report directory
   max_steps: 0 # Maximum number of pipeline rows to process; set to 0 to process every row in the filtered pipeline CSV
   max_candidates_per_step: 60 # Maximum discovered company/product candidates to keep per pipeline step after dedupe
   verbose: true # Whether to output the current high-level execution logs to the console
@@ -259,6 +259,30 @@ reporting:
   include_logo_gallery: true # Whether to include a logo gallery in the main markdown report
   include_unverified_profiles: false # If false, profile tables/logos include only companies included in processed steps
   generate_narratives_in_landscape_scan: false # If false, skip analyst/critical/memo/slide LLM calls during landscape_scan mode
+
+summary:
+  enabled: true # Whether to create a clean CSV summary after a pipeline run
+  use_llm: true # If true, use the summary agent LLM pass; if false, use deterministic table extraction only
+  standalone_report_dir: null # Existing report directory to summarize when runtime.analysis_mode is summary_only
+  output_dir: null # Optional output directory for summary_only; null writes into standalone_report_dir
+  output_file_name: competitor_summary.csv # CSV file written by the summary agent
+  max_context_chars: 90000 # Maximum report/context characters sent to the summary agent prompt
+  max_rows: 200 # Maximum rows allowed in the generated summary CSV
+  include_critical_missing_companies: true # Let the summary agent add canonical missing companies called out by critical reviews, using unknown for unavailable facts
+  output_columns: # Exact CSV schema. The gentic_posture spelling is preserved to match the requested output.
+    - company name
+    - products/solutions
+    - type
+    - taxonomy_phase
+    - taxonomy_subcategory
+    - founded
+    - headquarters
+    - funding
+    - funding_rounds
+    - employees
+    - website
+    - specialization
+    - gentic_posture
 
 logos:
   download_enabled: true # Whether to try downloading a logo for every reportable profiled company
