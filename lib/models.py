@@ -56,6 +56,10 @@ class Candidate(BaseModel):
     product_or_solution: str = ""
     evidence_role: str = "target_vendor"  # target_vendor|publisher_only|customer|partner|unclear
 
+    # Cheap first-pass fields used in landscape_scan mode.
+    website: str = ""
+    explicit_agentic_posture: str = "unclear"  # explicit|adjacent|unclear
+
 
 class TaxonomyAssignment(BaseModel):
     """A controlled-taxonomy assignment for a pipeline step or company capability."""

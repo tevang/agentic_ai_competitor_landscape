@@ -1,6 +1,7 @@
 """Entry point for the biotech agentic competitive-intelligence pipeline."""
 
 import argparse
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -11,11 +12,13 @@ from lib.agents.fact_driven_analyst_agent import FactDrivenAnalystAgent
 from lib.agents.planner_agent import PlannerAgent
 from lib.agents.presentation_agent import PresentationAgent
 from lib.agents.research_agent import ResearchAgent
+from lib.agents.summary_agent import SummaryAgent
 from lib.agents.taxonomy_enforcement_agent import TaxonomyEnforcementAgent
 from lib.agents.user_company_intake_agent import UserCompanyIntakeAgent
 from lib.agents.verification_agent import VerificationAgent
-from lib.config import load_config
+from lib.config import AppConfig, load_config
 from lib.llm import LLM
+from lib.models import PipelineStep
 from lib.orchestrator import CompetitiveLandscapeOrchestrator
 from lib.retrieval.evidence_store import EvidenceStore
 from lib.retrieval.web_search import WebSearchService
@@ -33,7 +36,83 @@ def parse_args() -> argparse.Namespace:
         default="config.yml",
         help="Path to the YAML configuration file.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["landscape_scan", "deep_dive", "summary_only"],
+        default=None,
+        help="Override runtime.analysis_mode from config.yml.",
+    )
+    parser.add_argument(
+        "--deep-subphases",
+        default=None,
+        help="Comma-separated subphase names to keep for deep_dive mode.",
+    )
+    parser.add_argument(
+        "--deep-phases",
+        default=None,
+        help="Comma-separated phase names to keep for deep_dive mode.",
+    )
+    parser.add_argument(
+        "--report-dir",
+        default=None,
+        help="Existing report directory to summarize when mode is summary_only.",
+    )
+    parser.add_argument(
+        "--summary-output",
+        default=None,
+        help="Optional explicit output CSV path for summary_only mode.",
+    )
+    parser.add_argument(
+        "--verbosity",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help="Override runtime.verbosity from config.yml.",
+    )
     return parser.parse_args()
+
+
+def apply_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfig:
+    """Apply optional command-line overrides to the loaded configuration."""
+
+    if args.mode:
+        config.runtime.analysis_mode = args.mode
+
+    if args.verbosity is not None:
+        config.runtime.verbosity = args.verbosity
+
+    if args.deep_subphases is not None:
+        config.runtime.deep_dive_subphases = _parse_csv_arg(args.deep_subphases)
+
+    if args.deep_phases is not None:
+        config.runtime.deep_dive_phases = _parse_csv_arg(args.deep_phases)
+
+    if args.report_dir is not None:
+        config.summary.standalone_report_dir = args.report_dir
+
+    return config
+
+
+def filter_steps_for_runtime(steps: list[PipelineStep], config: AppConfig) -> list[PipelineStep]:
+    """Filter pipeline steps for deep_dive mode when the user supplied narrower phase/subphase lists."""
+
+    if config.runtime.analysis_mode != "deep_dive":
+        return steps
+
+    phase_filter = {value.strip().lower() for value in config.runtime.deep_dive_phases if value.strip()}
+    subphase_filter = {value.strip().lower() for value in config.runtime.deep_dive_subphases if value.strip()}
+
+    if not phase_filter and not subphase_filter:
+        return steps
+
+    filtered: list[PipelineStep] = []
+    for step in steps:
+        phase_matches = not phase_filter or step.phase.strip().lower() in phase_filter
+        subphase_matches = not subphase_filter or step.step.strip().lower() in subphase_filter
+        if phase_matches and subphase_matches:
+            filtered.append(step)
+
+    return filtered
 
 
 def print_dataframe_section(title: str, dataframe, empty_message: str) -> None:
@@ -46,21 +125,89 @@ def print_dataframe_section(title: str, dataframe, empty_message: str) -> None:
         print(dataframe.to_markdown(index=False))
 
 
+def print_text_section(title: str, text: str) -> None:
+    """Print a text section only when the content is non-empty."""
+
+    clean = (text or "").strip()
+    if clean:
+        print(f"\n\n# {title}\n")
+        print(clean)
+
+
+def _parse_csv_arg(value: str) -> list[str]:
+    """Parse a comma-separated CLI value into clean strings."""
+
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _build_llm_if_needed(config: AppConfig) -> LLM | None:
+    """Create an LLM client only when the configured execution path needs one."""
+
+    if config.runtime.analysis_mode == "summary_only" and not config.summary.use_llm:
+        return None
+    return LLM(config.openai, verbosity=config.runtime.verbosity)
+
+
+def _run_summary_only(config: AppConfig, args: argparse.Namespace) -> None:
+    """Run only the summary agent on an existing report directory without Tavily/web search."""
+
+    report_dir = config.summary.standalone_report_dir
+    if not report_dir:
+        raise ValueError(
+            "summary_only mode requires summary.standalone_report_dir in config.yml "
+            "or --report-dir on the command line."
+        )
+
+    llm = _build_llm_if_needed(config)
+    summary_agent = SummaryAgent(llm=llm, config=config)
+
+    output_path = Path(args.summary_output) if args.summary_output else None
+    summary_df, summary_csv_path = summary_agent.summarize_existing_report_dir(
+        report_dir=Path(report_dir),
+        output_path=output_path,
+    )
+
+    print(f"Analysis mode: {config.runtime.analysis_mode}")
+    print_dataframe_section(
+        title="SUMMARY CSV PREVIEW",
+        dataframe=summary_df,
+        empty_message="No summary rows created.",
+    )
+    print("\n\n# WRITTEN SUMMARY FILE\n")
+    print(f"- summary_csv: {summary_csv_path}")
+
+
 def main() -> None:
     """Load configuration, initialize services, run the workflow, and print the outputs."""
 
     load_dotenv()
     args = parse_args()
-    config = load_config(args.config)
+    config = apply_cli_overrides(load_config(args.config), args)
 
-    steps = load_pipeline_csv(config.paths.pipeline_csv)
+    if config.runtime.analysis_mode == "summary_only":
+        _run_summary_only(config, args)
+        return
+
+    all_steps = load_pipeline_csv(config.paths.pipeline_csv)
+    steps = filter_steps_for_runtime(all_steps, config)
     seed_companies = load_seed_companies_csv(
         path=config.paths.seed_companies_csv,
         enabled=config.user_inputs.seed_companies_enabled,
         required=config.user_inputs.seed_companies_required,
     )
 
-    llm = LLM(config.openai)
+    if config.runtime.verbosity >= 1:
+        print(
+            "[config] "
+            f"analysis_mode={config.runtime.analysis_mode}, "
+            f"search_profile={config.get_active_search_profile_name()}, "
+            f"pipeline_rows_loaded={len(all_steps)}, "
+            f"pipeline_rows_after_filter={len(steps)}"
+        )
+
+    llm = LLM(config.openai, verbosity=config.runtime.verbosity)
     web_search = WebSearchService(config)
     store = EvidenceStore(config.paths, config.rag)
 
@@ -74,6 +221,7 @@ def main() -> None:
     fact_driven_analyst_agent = FactDrivenAnalystAgent(llm, config)
     critical_agent = CriticalAgent(llm, config)
     presentation_agent = PresentationAgent(llm, config)
+    summary_agent = SummaryAgent(llm=llm, config=config)
     report_writer = ReportWriter(config)
     logo_downloader = LogoDownloader(config)
 
@@ -89,13 +237,16 @@ def main() -> None:
         user_company_intake_agent=user_company_intake_agent,
         fact_driven_analyst_agent=fact_driven_analyst_agent,
         critical_agent=critical_agent,
+        summary_agent=summary_agent,
         report_writer=report_writer,
         logo_downloader=logo_downloader,
     )
     results = orchestrator.run(steps=steps, seed_companies=seed_companies)
     processed_steps = results["run_steps"]
 
-    print(f"Loaded {len(steps)} pipeline steps. Running {len(processed_steps)} step(s).")
+    print(f"Loaded {len(all_steps)} pipeline steps. Running {len(processed_steps)} step(s).")
+    print(f"Analysis mode: {config.runtime.analysis_mode}")
+
     print_dataframe_section(
         title="COMPETITOR COVERAGE MATRIX",
         dataframe=results["matrix_df"],
@@ -112,17 +263,18 @@ def main() -> None:
         empty_message="No gaps yet.",
     )
 
-    print("\n\n# FACT-DRIVEN ANALYST VIEW\n")
-    print(results["fact_analysis"])
+    summary_df = results.get("summary_df")
+    if summary_df is not None:
+        print_dataframe_section(
+            title="SUMMARY CSV PREVIEW",
+            dataframe=summary_df,
+            empty_message="No summary rows created.",
+        )
 
-    print("\n\n# CRITICAL AGENT REVIEW\n")
-    print(results["critical_review"])
-
-    print("\n\n# GAP MEMO\n")
-    print(results["gap_memo"])
-
-    print("\n\n# PRESENTATION OUTLINE\n")
-    print(results["slide_outline"])
+    print_text_section("FACT-DRIVEN ANALYST VIEW", str(results.get("fact_analysis", "")))
+    print_text_section("CRITICAL AGENT REVIEW", str(results.get("critical_review", "")))
+    print_text_section("GAP MEMO", str(results.get("gap_memo", "")))
+    print_text_section("PRESENTATION OUTLINE", str(results.get("slide_outline", "")))
 
     if results["report_paths"]:
         print("\n\n# WRITTEN REPORT FILES\n")

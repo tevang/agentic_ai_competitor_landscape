@@ -1,5 +1,7 @@
 """Top-level orchestration logic for the multi-agent competitive-intelligence workflow."""
 
+from pathlib import Path
+
 import pandas as pd
 
 from lib.agents.critical_agent import CriticalAgent
@@ -9,6 +11,7 @@ from lib.agents.fact_driven_analyst_agent import FactDrivenAnalystAgent
 from lib.agents.planner_agent import PlannerAgent
 from lib.agents.presentation_agent import PresentationAgent
 from lib.agents.research_agent import ResearchAgent
+from lib.agents.summary_agent import SummaryAgent
 from lib.agents.taxonomy_enforcement_agent import TaxonomyEnforcementAgent
 from lib.agents.user_company_intake_agent import UserCompanyIntakeAgent
 from lib.agents.verification_agent import VerificationAgent
@@ -37,6 +40,7 @@ class CompetitiveLandscapeOrchestrator:
         user_company_intake_agent: UserCompanyIntakeAgent,
         fact_driven_analyst_agent: FactDrivenAnalystAgent,
         critical_agent: CriticalAgent,
+        summary_agent: SummaryAgent,
         report_writer: ReportWriter,
         logo_downloader: LogoDownloader,
     ) -> None:
@@ -53,6 +57,7 @@ class CompetitiveLandscapeOrchestrator:
         self.user_company_intake_agent = user_company_intake_agent
         self.fact_driven_analyst_agent = fact_driven_analyst_agent
         self.critical_agent = critical_agent
+        self.summary_agent = summary_agent
         self.report_writer = report_writer
         self.logo_downloader = logo_downloader
 
@@ -73,7 +78,7 @@ class CompetitiveLandscapeOrchestrator:
             canonical_name(request.company_name): request for request in seed_requests
         }
 
-        if self.config.runtime.process_user_seed_companies_first:
+        if self.config.runtime.process_user_seed_companies_first and self.config.runtime.analysis_mode == "deep_dive":
             profile_cache = self._preload_seed_company_profiles(seed_requests, profile_cache)
 
         for step in run_steps:
@@ -104,26 +109,47 @@ class CompetitiveLandscapeOrchestrator:
             if cache_key in report_profile_cache:
                 report_profile_cache[cache_key].logo_path = logo_path
 
-        profile_df = build_profile_df(report_profile_cache)
+        minimal_profiles = self.config.runtime.analysis_mode == "landscape_scan"
+        profile_df = build_profile_df(report_profile_cache, minimal=minimal_profiles)
         matrix_df = build_matrix_df(records_df)
         gap_df = compute_gap_scores(records_df, run_steps, self.config)
 
-        fact_analysis = self.fact_driven_analyst_agent.analyze(matrix_df, profile_df, gap_df)
-        critical_review = self.critical_agent.challenge(matrix_df, profile_df, gap_df, fact_analysis)
-        gap_memo = self.presentation_agent.generate_gap_memo(
-            matrix_df=matrix_df,
-            profile_df=profile_df,
-            gap_df=gap_df,
-            fact_analysis=fact_analysis,
-            critical_review=critical_review,
-        )
-        slide_outline = self.presentation_agent.generate_slide_outline(
-            matrix_df=matrix_df,
-            profile_df=profile_df,
-            gap_df=gap_df,
-            fact_analysis=fact_analysis,
-            critical_review=critical_review,
-        )
+        if self._should_generate_narratives():
+            fact_analysis = self.fact_driven_analyst_agent.analyze(matrix_df, profile_df, gap_df)
+            critical_review = self.critical_agent.challenge(matrix_df, profile_df, gap_df, fact_analysis)
+            gap_memo = self.presentation_agent.generate_gap_memo(
+                matrix_df=matrix_df,
+                profile_df=profile_df,
+                gap_df=gap_df,
+                fact_analysis=fact_analysis,
+                critical_review=critical_review,
+            )
+            slide_outline = self.presentation_agent.generate_slide_outline(
+                matrix_df=matrix_df,
+                profile_df=profile_df,
+                gap_df=gap_df,
+                fact_analysis=fact_analysis,
+                critical_review=critical_review,
+            )
+        else:
+            fact_analysis = self._build_scan_summary(matrix_df, profile_df, gap_df)
+            critical_review = ""
+            gap_memo = ""
+            slide_outline = ""
+
+        summary_df = pd.DataFrame(columns=self.config.summary.output_columns)
+        summary_csv_path = ""
+        if self.config.summary.enabled:
+            summary_df, summary_csv_path = self.summary_agent.summarize_pipeline_results(
+                matrix_df=matrix_df,
+                profile_df=profile_df,
+                gap_df=gap_df,
+                fact_analysis=fact_analysis,
+                critical_review=critical_review,
+                gap_memo=gap_memo,
+                slide_outline=slide_outline,
+                run_dir=Path(run_context["run_dir"]),
+            )
 
         results: dict[str, object] = {
             "run_steps": run_steps,
@@ -132,13 +158,19 @@ class CompetitiveLandscapeOrchestrator:
             "profile_df": profile_df,
             "matrix_df": matrix_df,
             "gap_df": gap_df,
+            "summary_df": summary_df,
+            "summary_csv_path": summary_csv_path,
             "fact_analysis": fact_analysis,
             "critical_review": critical_review,
             "gap_memo": gap_memo,
             "slide_outline": slide_outline,
             "run_context": run_context,
         }
+
         report_paths = self.report_writer.write_reports(results, run_context)
+        if summary_csv_path:
+            report_paths["summary_csv"] = summary_csv_path
+
         results["report_paths"] = report_paths
         return results
 
@@ -149,7 +181,7 @@ class CompetitiveLandscapeOrchestrator:
         seed_request_map: dict[str, CompanyResearchRequest],
         step_seed_candidates: list[Candidate],
     ) -> tuple[list[dict[str, object]], dict[str, CompanyProfile]]:
-        """Process one pipeline step from query planning through verification."""
+        """Process one pipeline step from query planning through verification or cheap scan inclusion."""
 
         if self.config.runtime.verbose:
             print(f"\n=== Processing: {step.phase} -> {step.step} ===")
@@ -169,6 +201,17 @@ class CompetitiveLandscapeOrchestrator:
             more_docs = self.research_agent.collect_step_evidence(step, refined_queries)
             docs.extend(more_docs)
             candidates = self.extraction_agent.extract_candidates(step, docs, seed_candidates=step_seed_candidates)
+
+        if self.config.runtime.analysis_mode == "landscape_scan":
+            records = self._process_landscape_scan_candidates(
+                step=step,
+                candidates=candidates,
+                profile_cache=profile_cache,
+                step_taxonomy=step_taxonomy,
+            )
+            if self.config.runtime.verbose:
+                print(f"  kept {len(records)} first-pass candidate companies")
+            return records, profile_cache
 
         records: list[dict[str, object]] = []
         for candidate in candidates[: self.config.runtime.max_candidates_per_step]:
@@ -230,33 +273,130 @@ class CompetitiveLandscapeOrchestrator:
                 competitor_label = self._competitor_label(profile.name, product_or_solution)
 
                 records.append(
-                    {
-                        "phase": step.phase,
-                        "step": step.step,
-                        "company": profile.name,
-                        "competitor_label": competitor_label,
-                        "product_or_solution": product_or_solution,
-                        "vertical_or_horizontal": profile.vertical_or_horizontal,
-                        "funding": profile.funding,
-                        "funding_rounds": profile.funding_rounds,
-                        "employees": profile.employees,
-                        "founded": profile.founded,
-                        "headquarters": profile.headquarters,
-                        "presence": "; ".join(profile.presence),
-                        "website": profile.website,
-                        "specialization": profile.specialization,
-                        "agentic_posture": profile.explicit_agentic_posture,
-                        "taxonomy_primary_phase": step_taxonomy.primary_phase,
-                        "taxonomy_primary_subcategory": step_taxonomy.primary_subcategory,
-                        "confidence": round(min(candidate.confidence, profile.confidence, verdict.confidence), 2),
-                        "reason": verdict.reason,
-                    }
+                    self._build_record(
+                        step=step,
+                        profile=profile,
+                        product_or_solution=product_or_solution,
+                        competitor_label=competitor_label,
+                        confidence=round(min(candidate.confidence, profile.confidence, verdict.confidence), 2),
+                        reason=verdict.reason,
+                        verification_mode="deep_dive_verified",
+                    )
                 )
 
         if self.config.runtime.verbose:
             print(f"  kept {len(records)} verified companies")
 
         return records, profile_cache
+
+    def _process_landscape_scan_candidates(
+        self,
+        step: PipelineStep,
+        candidates: list[Candidate],
+        profile_cache: dict[str, CompanyProfile],
+        step_taxonomy,
+    ) -> list[dict[str, object]]:
+        """Convert extraction candidates into minimal first-pass profiles without enrichment/verification."""
+
+        records: list[dict[str, object]] = []
+        allowed_postures = {
+            value.strip().lower()
+            for value in self.config.discovery.landscape_scan_agentic_postures
+            if value.strip()
+        }
+
+        for candidate in candidates[: self.config.runtime.max_candidates_per_step]:
+            if (candidate.evidence_role or "").strip().lower() == "publisher_only":
+                if self.config.runtime.verbose:
+                    print(f"  [scan-skip] publisher-only source, not vendor: {candidate.name}")
+                continue
+
+            posture = (candidate.explicit_agentic_posture or "unclear").strip().lower()
+            if allowed_postures and posture not in allowed_postures:
+                if self.config.runtime.verbosity >= 1:
+                    print(f"  [scan-skip] posture={posture}: {candidate.name}")
+                continue
+
+            company_name = candidate.owning_company_name or candidate.name
+            cache_key = canonical_name(company_name)
+            profile = self._minimal_profile_from_candidate(candidate, step_taxonomy)
+            profile = self.taxonomy_enforcement_agent.apply_step_taxonomy(profile, step_taxonomy)
+            self._store_profile_aliases(profile_cache, cache_key, profile)
+
+            product_or_solution = candidate.product_or_solution or self._first_product(profile)
+            competitor_label = self._competitor_label(profile.name, product_or_solution)
+
+            records.append(
+                self._build_record(
+                    step=step,
+                    profile=profile,
+                    product_or_solution=product_or_solution,
+                    competitor_label=competitor_label,
+                    confidence=round(min(candidate.confidence, profile.confidence), 2),
+                    reason=candidate.rationale,
+                    verification_mode="landscape_scan_unverified",
+                )
+            )
+
+        return records
+
+    def _minimal_profile_from_candidate(self, candidate: Candidate, step_taxonomy) -> CompanyProfile:
+        """Create a minimal first-pass company profile from a candidate."""
+
+        company_name = candidate.owning_company_name or candidate.name
+        product = candidate.product_or_solution.strip()
+        website = candidate.website.strip()
+        posture = candidate.explicit_agentic_posture.strip().lower() or "unclear"
+
+        return CompanyProfile(
+            name=company_name,
+            vertical_or_horizontal=candidate.vertical_or_horizontal_guess or "unknown",
+            website=website,
+            specialization=candidate.rationale,
+            explicit_agentic_posture=posture,
+            confidence=candidate.confidence,
+            evidence_urls=unique_preserve_order(candidate.evidence_urls),
+            taxonomy_primary_phase=step_taxonomy.primary_phase,
+            taxonomy_primary_subcategory=step_taxonomy.primary_subcategory,
+            taxonomy_phase_labels=list(step_taxonomy.phase_labels),
+            taxonomy_subcategory_labels=list(step_taxonomy.subcategory_labels),
+            products_or_solutions=[product] if product else [],
+        )
+
+    def _build_record(
+        self,
+        step: PipelineStep,
+        profile: CompanyProfile,
+        product_or_solution: str,
+        competitor_label: str,
+        confidence: float,
+        reason: str,
+        verification_mode: str,
+    ) -> dict[str, object]:
+        """Build a normalized record row for matrix/profile/gap analytics."""
+
+        return {
+            "phase": step.phase,
+            "step": step.step,
+            "company": profile.name,
+            "competitor_label": competitor_label,
+            "product_or_solution": product_or_solution,
+            "vertical_or_horizontal": profile.vertical_or_horizontal,
+            "funding": profile.funding,
+            "funding_rounds": profile.funding_rounds,
+            "employees": profile.employees,
+            "founded": profile.founded,
+            "headquarters": profile.headquarters,
+            "presence": "; ".join(profile.presence),
+            "website": profile.website,
+            "specialization": profile.specialization,
+            "agentic_posture": profile.explicit_agentic_posture,
+            "taxonomy_primary_phase": profile.taxonomy_primary_phase,
+            "taxonomy_primary_subcategory": profile.taxonomy_primary_subcategory,
+            "confidence": confidence,
+            "reason": reason,
+            "verification_mode": verification_mode,
+        }
 
     def _preload_seed_company_profiles(
         self,
@@ -293,7 +433,7 @@ class CompetitiveLandscapeOrchestrator:
         if self.config.reporting.include_unverified_profiles:
             return deduped_all
 
-        verified_keys = {
+        included_keys = {
             canonical_name(str(record.get("company", "")))
             for record in records
             if record.get("company")
@@ -301,7 +441,7 @@ class CompetitiveLandscapeOrchestrator:
 
         selected: dict[str, CompanyProfile] = {}
         for profile_key, profile in deduped_all.items():
-            if profile_key in verified_keys:
+            if profile_key in included_keys:
                 selected[profile_key] = profile
 
         return selected
@@ -340,6 +480,35 @@ class CompetitiveLandscapeOrchestrator:
                 deduped[profile_key] = profile
 
         return deduped
+
+    def _should_generate_narratives(self) -> bool:
+        """Return whether expensive narrative agents should run."""
+
+        if self.config.runtime.analysis_mode == "landscape_scan":
+            return self.config.reporting.generate_narratives_in_landscape_scan
+        return True
+
+    def _build_scan_summary(
+        self,
+        matrix_df: pd.DataFrame,
+        profile_df: pd.DataFrame,
+        gap_df: pd.DataFrame,
+    ) -> str:
+        """Build a deterministic first-pass summary without LLM calls."""
+
+        competitor_count = int(profile_df["company"].nunique()) if not profile_df.empty else 0
+        step_count = int(matrix_df[["phase", "step"]].drop_duplicates().shape[0]) if not matrix_df.empty else 0
+        explicit_count = int((profile_df["agentic_posture"] == "explicit").sum()) if not profile_df.empty else 0
+        adjacent_count = int((profile_df["agentic_posture"] == "adjacent").sum()) if not profile_df.empty else 0
+
+        return (
+            "Landscape scan mode completed. "
+            f"Mapped {competitor_count} candidate companies across {step_count} step(s). "
+            f"Agentic posture labels: explicit={explicit_count}, adjacent={adjacent_count}. "
+            "This first-pass map intentionally skips deep enrichment, per-company verification, "
+            "funding/headcount/founded/HQ extraction, and narrative analysis to reduce Tavily and OpenAI usage. "
+            "Run analysis_mode=deep_dive with deep_dive_subphases populated to enrich and verify selected subphases."
+        )
 
     def _first_product(self, profile: CompanyProfile) -> str:
         """Return the first known product/solution for a profile."""
