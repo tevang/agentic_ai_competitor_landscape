@@ -31,14 +31,65 @@ class PlannerAgent:
             if cached and not self.config.search_protocol.allow_web_search_after_cache_hit:
                 return cached[:max_total_queries]
 
+        should_skip_llm_plan = (
+            self.config.runtime.analysis_mode == "landscape_scan"
+            and self.config.discovery.skip_llm_query_planning_in_landscape_scan
+        )
+
+        llm_queries: list[str] = []
+        if not should_skip_llm_plan:
+            llm_queries = self._build_llm_queries(step)
+
+        auto_queries: list[str] = []
+        if self.config.discovery.deterministic_queries_enabled:
+            auto_queries = build_discovery_queries(
+                step=step,
+                max_queries=self.config.discovery.max_auto_queries_per_step,
+                max_terms=self.config.discovery.max_search_terms_per_step,
+            )
+
+        queries = unique_preserve_order(cached + llm_queries + auto_queries)[:max_total_queries]
+        self.store.save_query_plan(step.phase, step.step, step_signature, queries)
+
+        if self.config.runtime.verbosity >= 1:
+            print(
+                "[planner] "
+                f"{step.phase} -> {step.step}: "
+                f"queries={len(queries)}, "
+                f"llm_queries={len(llm_queries)}, "
+                f"auto_queries={len(auto_queries)}, "
+                f"mode={self.config.runtime.analysis_mode}"
+            )
+
+        return queries
+
+    def refine_queries(self, step: PipelineStep, candidates: list[Candidate]) -> list[str]:
+        """Produce a generic refinement pass when the first search pass is too sparse."""
+
+        seen = ", ".join(candidate.name for candidate in candidates[:5]) or "none"
+        templates = [
+            f'"{step.step}" "AI" "software vendor" pharma',
+            f'"{step.step}" "automation platform" "life sciences"',
+            f'"{step.step}" "machine learning" "company"',
+            f'"{step.step}" "product page" "AI" "biopharma"',
+            f'"{step.step}" "agentic AI" pharma {seen}',
+            f'"{step.step}" "NLP" "workflow automation" "vendor"',
+        ]
+        return templates[: self.config.react.refinement_query_count]
+
+    def _build_llm_queries(self, step: PipelineStep) -> list[str]:
+        """Build LLM-assisted queries for deeper modes."""
+
         query_count = self.config.get_active_search_profile().queries_per_step
+        if query_count <= 0:
+            return []
+
         taxonomy_target = (
             format_taxonomy_target_for_step(step.phase, step.step)
             if self.config.taxonomy.include_in_planner_prompt
             else "Not provided."
         )
 
-        llm_queries: list[str] = []
         prompt = f"""
 You are a search-planning agent for biotech competitive intelligence.
 
@@ -71,32 +122,6 @@ Return JSON:
 """
         try:
             data = self.llm.ask_json(prompt)
-            llm_queries = [query.strip() for query in data.get("queries", []) if query.strip()]
+            return [query.strip() for query in data.get("queries", []) if query.strip()]
         except Exception:
-            llm_queries = []
-
-        auto_queries: list[str] = []
-        if self.config.discovery.deterministic_queries_enabled:
-            auto_queries = build_discovery_queries(
-                step=step,
-                max_queries=self.config.discovery.max_auto_queries_per_step,
-                max_terms=self.config.discovery.max_search_terms_per_step,
-            )
-
-        queries = unique_preserve_order(cached + llm_queries + auto_queries)[:max_total_queries]
-        self.store.save_query_plan(step.phase, step.step, step_signature, queries)
-        return queries
-
-    def refine_queries(self, step: PipelineStep, candidates: list[Candidate]) -> list[str]:
-        """Produce a generic refinement pass when the first search pass is too sparse."""
-
-        seen = ", ".join(candidate.name for candidate in candidates[:5]) or "none"
-        templates = [
-            f'"{step.step}" "AI" "software vendor" pharma',
-            f'"{step.step}" "automation platform" "life sciences"',
-            f'"{step.step}" "machine learning" "company"',
-            f'"{step.step}" "product page" "AI" "biopharma"',
-            f'"{step.step}" "agentic AI" pharma {seen}',
-            f'"{step.step}" "NLP" "workflow automation" "vendor"',
-        ]
-        return templates[: self.config.react.refinement_query_count]
+            return []

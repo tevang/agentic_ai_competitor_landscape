@@ -7,7 +7,7 @@ from lib.models import CompanyProfile, PipelineStep
 
 
 def build_matrix_df(records_df: pd.DataFrame) -> pd.DataFrame:
-    """Build a step-level matrix mapping each pipeline step to its verified competitors."""
+    """Build a step-level matrix mapping each pipeline step to its included competitors."""
 
     if records_df.empty:
         return pd.DataFrame(columns=["phase", "step", "competitors"])
@@ -23,7 +23,7 @@ def build_matrix_df(records_df: pd.DataFrame) -> pd.DataFrame:
     return matrix_df.sort_values(["phase", "step"])
 
 
-def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
+def build_profile_df(profile_cache: dict[str, CompanyProfile], minimal: bool = False) -> pd.DataFrame:
     """Convert the in-memory company-profile cache into a dataframe."""
 
     rows: list[dict[str, str | float]] = []
@@ -35,10 +35,26 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
             continue
         seen_company_keys.add(company_key)
 
+        base_row = {
+            "company": profile.name,
+            "products_or_solutions": "; ".join(profile.products_or_solutions),
+            "website": profile.website,
+            "agentic_posture": profile.explicit_agentic_posture,
+            "confidence": round(profile.confidence, 2),
+            "logo_path": profile.logo_path,
+            "taxonomy_primary_phase": profile.taxonomy_primary_phase,
+            "taxonomy_primary_subcategory": profile.taxonomy_primary_subcategory,
+            "taxonomy_phase_labels": "; ".join(profile.taxonomy_phase_labels),
+            "taxonomy_subcategory_labels": "; ".join(profile.taxonomy_subcategory_labels),
+        }
+
+        if minimal:
+            rows.append(base_row)
+            continue
+
         rows.append(
             {
-                "company": profile.name,
-                "products_or_solutions": "; ".join(profile.products_or_solutions),
+                **base_row,
                 "type": profile.vertical_or_horizontal,
                 "funding": profile.funding,
                 "funding_rounds": profile.funding_rounds,
@@ -46,41 +62,34 @@ def build_profile_df(profile_cache: dict[str, CompanyProfile]) -> pd.DataFrame:
                 "founded": profile.founded,
                 "headquarters": profile.headquarters,
                 "presence": "; ".join(profile.presence),
-                "website": profile.website,
                 "specialization": profile.specialization,
-                "agentic_posture": profile.explicit_agentic_posture,
-                "confidence": round(profile.confidence, 2),
-                "logo_path": profile.logo_path,
-                "taxonomy_primary_phase": profile.taxonomy_primary_phase,
-                "taxonomy_primary_subcategory": profile.taxonomy_primary_subcategory,
-                "taxonomy_phase_labels": "; ".join(profile.taxonomy_phase_labels),
-                "taxonomy_subcategory_labels": "; ".join(profile.taxonomy_subcategory_labels),
             }
         )
 
     if not rows:
-        return pd.DataFrame(
-            columns=[
-                "company",
-                "products_or_solutions",
-                "type",
-                "funding",
-                "funding_rounds",
-                "employees",
-                "founded",
-                "headquarters",
-                "presence",
-                "website",
-                "specialization",
-                "agentic_posture",
-                "confidence",
-                "logo_path",
-                "taxonomy_primary_phase",
-                "taxonomy_primary_subcategory",
-                "taxonomy_phase_labels",
-                "taxonomy_subcategory_labels",
-            ]
-        )
+        minimal_columns = [
+            "company",
+            "products_or_solutions",
+            "website",
+            "agentic_posture",
+            "confidence",
+            "logo_path",
+            "taxonomy_primary_phase",
+            "taxonomy_primary_subcategory",
+            "taxonomy_phase_labels",
+            "taxonomy_subcategory_labels",
+        ]
+        full_columns = minimal_columns + [
+            "type",
+            "funding",
+            "funding_rounds",
+            "employees",
+            "founded",
+            "headquarters",
+            "presence",
+            "specialization",
+        ]
+        return pd.DataFrame(columns=minimal_columns if minimal else full_columns)
 
     return pd.DataFrame(rows).sort_values("company")
 
