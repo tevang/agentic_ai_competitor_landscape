@@ -7,7 +7,7 @@ It is designed for two common workflows:
 - Run a cheaper first-pass landscape scan to see which areas look interesting.
 - Run a deeper analysis on selected phases or subphases after you know where to focus.
 
-![Agent architecture](docs/AI_agent_orchstration.png)
+![Agent teams](docs/AI_agent_teams.png)
 
 ## What You Get
 
