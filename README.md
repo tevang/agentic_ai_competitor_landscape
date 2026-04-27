@@ -2,7 +2,7 @@
 
 This project uses a team of AI agents to automatically research, analyze, and map the competitive landscape for AI companies in the biotech and drug discovery industry.
 
-![Agent architecture](docs/AI_agent_orchstration.png)
+![Agent teams](docs/AI_agent_teams.png)
 
 ## What it does
 
