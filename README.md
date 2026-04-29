@@ -154,3 +154,7 @@ Each run writes files under `reports/<run_id>/`. The most useful files are usual
 See [docs/advanced_usage.md](docs/advanced_usage.md) for additional CLI examples, mode details, and summary-only options.
 
 See [docs/agent_workflow.md](docs/agent_workflow.md) for the current agent orchestration workflow.
+
+See [docs/interview_debugging_checkpoints.md](docs/interview_debugging_checkpoints.md) for PyCharm breakpoint suggestions and interview-focused debugging notes.
+
+See [docs/interview_question_answers.md](docs/interview_question_answers.md) for interview-ready explanations of the main AI engineering concepts in this project.
